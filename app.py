@@ -137,25 +137,37 @@ def prox_data_mes(dia, h, m):
 
 from datetime import timedelta
 
-def prox_sexta(h, m):
+def primeira_sexta_do_mes(ano, mes, h, m):
+    d = datetime(ano, mes, 1, h, m, 0, tzinfo=timezone.utc)
+    dias_ate_sexta = (4 - d.weekday()) % 7
+    return d + timedelta(days=dias_ate_sexta)
+
+def prox_primeira_sexta(h, m):
     agora = datetime.now(timezone.utc)
-    alvo  = agora.replace(hour=h, minute=m, second=0, microsecond=0)
-    dias_ate_sexta = (4 - agora.weekday()) % 7
-    if dias_ate_sexta == 0 and agora >= alvo:
-        dias_ate_sexta = 7
-    return alvo + timedelta(days=dias_ate_sexta)
+    candidata = primeira_sexta_do_mes(agora.year, agora.month, h, m)
+    if candidata <= agora:
+        prox_mes = agora.month + 1 if agora.month < 12 else 1
+        prox_ano = agora.year + (1 if agora.month == 12 else 0)
+        candidata = primeira_sexta_do_mes(prox_ano, prox_mes, h, m)
+    return candidata
+
+# ── DATAS REAIS — ATUALIZAR 1x POR MÊS ──────────────────────
+# Fonte: forexfactory.com ou investing.com/economic-calendar
+# Para atualizar: troque os valores de d(ANO, MÊS, DIA, HORA, MIN)
+def d(ano, mes, dia, hora, minuto):
+    return datetime(ano, mes, dia, hora, minuto, 0, tzinfo=timezone.utc)
 
 EVENTOS = sorted([
-    {"id":"nfp",     "cur":"USD","nome":"NFP / PAYROLL",   "tipo":"PAYROLL","data":prox_sexta(13,30),         "desc":"1º sexta do mês · 13:30 UTC"},
-    {"id":"cpi_usd", "cur":"USD","nome":"CPI — EUA",       "tipo":"CPI",    "data":prox_data_mes(12,13,30),   "desc":"Mensal · 13:30 UTC"},
-    {"id":"fomc",    "cur":"USD","nome":"FOMC — JUROS EUA","tipo":"JUROS",  "data":prox_data_mes(19,19,0),    "desc":"8x ao ano · 19:00 UTC"},
-    {"id":"cpi_eur", "cur":"EUR","nome":"CPI — ZONA EURO", "tipo":"CPI",    "data":prox_data_mes(17,10,0),    "desc":"Mensal · 10:00 UTC"},
-    {"id":"bce",     "cur":"EUR","nome":"BCE — JUROS EUR", "tipo":"JUROS",  "data":prox_data_mes(6,13,15),    "desc":"8x ao ano · 13:15 UTC"},
-    {"id":"cpi_gbp", "cur":"GBP","nome":"CPI — UK",        "tipo":"CPI",    "data":prox_data_mes(19,7,0),     "desc":"Mensal · 07:00 UTC"},
-    {"id":"boe",     "cur":"GBP","nome":"BOE — JUROS GBP", "tipo":"JUROS",  "data":prox_data_mes(6,12,0),     "desc":"8x ao ano · 12:00 UTC"},
-    {"id":"cpi_aud", "cur":"AUD","nome":"CPI — AUSTRÁLIA", "tipo":"CPI",    "data":prox_data_mes(26,1,30),    "desc":"Trimestral · 01:30 UTC"},
-    {"id":"rba",     "cur":"AUD","nome":"RBA — JUROS AUD", "tipo":"JUROS",  "data":prox_data_mes(4,3,30),     "desc":"8x ao ano · 03:30 UTC"},
-    {"id":"boj",     "cur":"JPY","nome":"BOJ — JUROS JPY", "tipo":"JUROS",  "data":prox_data_mes(24,3,0),     "desc":"8x ao ano · 03:00 UTC"},
+    {"id":"nfp",     "cur":"USD","nome":"NFP / PAYROLL",    "tipo":"PAYROLL","data":d(2026, 2,20,13,30), "desc":"20 FEV · 13:30 UTC"},
+    {"id":"boj",     "cur":"JPY","nome":"BOJ — JUROS JPY",  "tipo":"JUROS",  "data":d(2026, 2,24, 3, 0), "desc":"24 FEV · 03:00 UTC"},
+    {"id":"cpi_aud", "cur":"AUD","nome":"CPI — AUSTRÁLIA",  "tipo":"CPI",    "data":d(2026, 2,25, 0,30), "desc":"25 FEV · 00:30 UTC"},
+    {"id":"rba",     "cur":"AUD","nome":"RBA — JUROS AUD",  "tipo":"JUROS",  "data":d(2026, 3, 3, 3,30), "desc":"03 MAR · 03:30 UTC"},
+    {"id":"boe",     "cur":"GBP","nome":"BOE — JUROS GBP",  "tipo":"JUROS",  "data":d(2026, 3, 5,12, 0), "desc":"05 MAR · 12:00 UTC"},
+    {"id":"bce",     "cur":"EUR","nome":"BCE — JUROS EUR",  "tipo":"JUROS",  "data":d(2026, 3, 6,13,15), "desc":"06 MAR · 13:15 UTC"},
+    {"id":"cpi_gbp", "cur":"GBP","nome":"CPI — UK",         "tipo":"CPI",    "data":d(2026, 3,18, 7, 0), "desc":"18 MAR · 07:00 UTC"},
+    {"id":"fomc",    "cur":"USD","nome":"FOMC — JUROS EUA", "tipo":"JUROS",  "data":d(2026, 3,18,19, 0), "desc":"18 MAR · 19:00 UTC"},
+    {"id":"cpi_usd", "cur":"USD","nome":"CPI — EUA",        "tipo":"CPI",    "data":d(2026, 3,25,13,30), "desc":"25 MAR · 13:30 UTC"},
+    {"id":"cpi_eur", "cur":"EUR","nome":"CPI — ZONA EURO",  "tipo":"CPI",    "data":d(2026, 3,31,10, 0), "desc":"31 MAR · 10:00 UTC"},
 ], key=lambda x: x["data"])
 
 # ── CSS ───────────────────────────────────────────────────────
