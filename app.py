@@ -1,35 +1,24 @@
 import streamlit as st
 import requests
-import json
-import re
 from datetime import datetime, timezone, timedelta
 
-# ── CONFIG ───────────────────────────────────────────────────
-st.set_page_config(
-    page_title="MacroSignal",
-    page_icon="📡",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="MacroSignal", page_icon="📡", layout="wide", initial_sidebar_state="collapsed")
+
+# ── CHAVES ───────────────────────────────────────────────────
+FRED_KEY = st.secrets.get("FRED_API_KEY", "")
+FCS_KEY  = st.secrets.get("FCS_API_KEY", "")
 
 # ── FRED API ─────────────────────────────────────────────────
-FRED_KEY = st.secrets.get("FRED_API_KEY", "")
-FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
-
 @st.cache_data(ttl=3600)
 def fred(series_id, limit=12):
     if not FRED_KEY:
         return None
     try:
-        r = requests.get(FRED_URL, params={
-            "series_id": series_id,
-            "api_key": FRED_KEY,
-            "file_type": "json",
-            "sort_order": "desc",
-            "limit": limit
+        r = requests.get("https://api.stlouisfed.org/fred/series/observations", params={
+            "series_id": series_id, "api_key": FRED_KEY,
+            "file_type": "json", "sort_order": "desc", "limit": limit
         }, timeout=10)
-        data = r.json().get("observations", [])
-        return [float(o["value"]) for o in data if o["value"] not in (".", "")]
+        return [float(o["value"]) for o in r.json().get("observations", []) if o["value"] not in (".", "")]
     except Exception:
         return None
 
@@ -37,59 +26,33 @@ def delta(series_id, limit=6):
     vals = fred(series_id, limit)
     if not vals or len(vals) < 2:
         return 0.0
-    recente = vals[0]
-    media   = sum(vals[1:]) / len(vals[1:])
+    recente, media = vals[0], sum(vals[1:]) / len(vals[1:])
     if media == 0:
         return 0.0
     return max(-1.0, min(1.0, (recente - media) / abs(media) * 10))
 
 # ── SÉRIES FRED ───────────────────────────────────────────────
 SERIES = {
-    "PAYROLL": {
-        "ADP PAYROLLS":        ("ADPWNUSNERSA",  1),
-        "JOBLESS CLAIMS":      ("IC4WSA",        -1),
-        "JOLTS VAGAS":         ("JTSJOL",         1),
-        "ISM EMPLOYMENT IDX":  ("MANEMP",         1),
-        "AVG WEEKLY HOURS":    ("AWHAETP",        1),
-    },
-    "CPI": {
-        "PPI (PRODUTOR)":      ("PPIACO",         1),
-        "PCE CORE":            ("PCEPILFE",       1),
-        "IMPORT PRICES":       ("IR",            -1),
-        "PETRÓLEO (WTI)":      ("DCOILWTICO",     1),
-        "AVG HOURLY EARNINGS": ("CES0500000003",  1),
-        "SHELTER / MORADIA":   ("CUSR0000SAH1",   1),
-    },
-    "JUROS": {
-        "PCE CORE":            ("PCEPILFE",       1),
-        "CPI CORE":            ("CPILFESL",       1),
-        "NFP / EMPREGO":       ("PAYEMS",         1),
-        "GDP":                 ("GDP",           -1),
-        "FEDWATCH PROB.":      ("FEDFUNDS",       1),
-    },
+    "PAYROLL": {"ADP PAYROLLS":("ADPWNUSNERSA",1),"JOBLESS CLAIMS":("IC4WSA",-1),"JOLTS VAGAS":("JTSJOL",1),"ISM EMPLOYMENT":("MANEMP",1),"AVG WEEKLY HOURS":("AWHAETP",1)},
+    "CPI":     {"PPI (PRODUTOR)":("PPIACO",1),"PCE CORE":("PCEPILFE",1),"IMPORT PRICES":("IR",-1),"PETROLEO WTI":("DCOILWTICO",1),"AVG HOURLY EARNINGS":("CES0500000003",1),"SHELTER":("CUSR0000SAH1",1)},
+    "JUROS":   {"PCE CORE":("PCEPILFE",1),"CPI CORE":("CPILFESL",1),"NFP EMPREGO":("PAYEMS",1),"GDP":("GDP",-1),"FEDFUNDS":("FEDFUNDS",1)},
 }
-
-PESOS = {
-    "PAYROLL": [30, 25, 20, 15, 10],
-    "CPI":     [25, 25, 15, 15, 10, 10],
-    "JUROS":   [30, 25, 20, 15, 10],
-}
+PESOS = {"PAYROLL":[30,25,20,15,10],"CPI":[25,25,15,15,10,10],"JUROS":[30,25,20,15,10]}
 
 @st.cache_data(ttl=3600)
 def calcular_score(tipo):
-    series = SERIES.get(tipo, {})
-    pesos  = PESOS.get(tipo, [])
-    total_w, score = 0, 0.0
-    indicadores = []
+    series, pesos = SERIES.get(tipo, {}), PESOS.get(tipo, [])
+    total_w = score = 0.0
+    inds = []
     for i, (nome, (sid, direcao)) in enumerate(series.items()):
-        w   = pesos[i] if i < len(pesos) else 10
+        w = pesos[i] if i < len(pesos) else 10
         val = delta(sid) * direcao
-        score   += val * w
+        score += val * w
         total_w += w
-        indicadores.append({"nome": nome, "valor": val, "peso": w})
-    return round(score / total_w if total_w > 0 else 0.0, 3), indicadores
+        inds.append({"nome": nome, "valor": val})
+    return round(score / total_w if total_w else 0.0, 3), inds
 
-# ── CORRELAÇÕES FX ───────────────────────────────────────────
+# ── FX ────────────────────────────────────────────────────────
 CORRELATOS = {"USD":"CAD","CAD":"USD","AUD":"NZD","NZD":"AUD","EUR":"GBP","GBP":"EUR","CHF":"JPY","JPY":"CHF"}
 ORDEM_FX   = ["EUR","GBP","AUD","NZD","USD","CAD","CHF","JPY"]
 TODAS_MOE  = ["USD","EUR","GBP","AUD","NZD","CAD","CHF","JPY"]
@@ -100,229 +63,143 @@ def canonico(a, b):
 def get_portfolio(cur):
     return [canonico(cur, m) for m in TODAS_MOE if m != cur and m != CORRELATOS.get(cur)]
 
-def veredicto(score):
-    return "FORTE" if score > 0.2 else "FRACO" if score < -0.2 else "NEUTRO"
+def veredicto(s):
+    return "FORTE" if s > 0.2 else "FRACO" if s < -0.2 else "NEUTRO"
 
 def direcao_par(par, cur, verd):
     if verd == "NEUTRO": return "NEUTRO"
     forte = verd == "FORTE"
     return ("BUY" if forte else "SELL") if par[:3] == cur else ("SELL" if forte else "BUY")
 
-# ── SCRAPING FOREXFACTORY ─────────────────────────────────────
-# Eventos que nos interessam (keywords para match)
-EVENTOS_ALVO = [
-    {"keywords": ["Non-Farm Employment", "NFP"],          "cur": "USD", "nome": "NFP / PAYROLL",    "tipo": "PAYROLL"},
-    {"keywords": ["Core CPI", "CPI m/m", "CPI y/y"],      "cur": "USD", "nome": "CPI — EUA",        "tipo": "CPI"},
-    {"keywords": ["FOMC Statement", "Federal Funds Rate"],"cur": "USD", "nome": "FOMC — JUROS EUA", "tipo": "JUROS"},
-    {"keywords": ["FOMC Meeting Minutes"],                 "cur": "USD", "nome": "FOMC — MINUTES",   "tipo": "JUROS"},
-    {"keywords": ["Flash CPI", "CPI Flash", "CPI Prelim"],"cur": "EUR", "nome": "CPI — ZONA EURO",  "tipo": "CPI"},
-    {"keywords": ["Main Refinancing Rate", "ECB"],         "cur": "EUR", "nome": "BCE — JUROS EUR",  "tipo": "JUROS"},
-    {"keywords": ["CPI y/y", "CPI m/m"],                  "cur": "GBP", "nome": "CPI — UK",         "tipo": "CPI"},
-    {"keywords": ["Official Bank Rate", "BOE"],            "cur": "GBP", "nome": "BOE — JUROS GBP",  "tipo": "JUROS"},
-    {"keywords": ["CPI q/q", "CPI y/y", "Trimmed Mean"],  "cur": "AUD", "nome": "CPI — AUSTRÁLIA",  "tipo": "CPI"},
-    {"keywords": ["Cash Rate", "RBA Rate"],                "cur": "AUD", "nome": "RBA — JUROS AUD",  "tipo": "JUROS"},
-    {"keywords": ["Policy Rate", "BOJ"],                   "cur": "JPY", "nome": "BOJ — JUROS JPY",  "tipo": "JUROS"},
-    {"keywords": ["Official Cash Rate", "RBNZ"],           "cur": "NZD", "nome": "RBNZ — JUROS NZD", "tipo": "JUROS"},
-    {"keywords": ["Overnight Rate", "BOC Rate"],           "cur": "CAD", "nome": "BOC — JUROS CAD",  "tipo": "JUROS"},
-]
+# ── CALENDÁRIO VIA FCS API ────────────────────────────────────
+KEYWORDS = {
+    "USD": [
+        (["Non-Farm Employment","Nonfarm Payroll"], "NFP / PAYROLL",    "PAYROLL"),
+        (["Core CPI","CPI m/m","CPI y/y"],          "CPI — EUA",        "CPI"),
+        (["Federal Funds Rate","FOMC Statement"],    "FOMC — JUROS EUA", "JUROS"),
+        (["FOMC Meeting Minutes"],                   "FOMC — MINUTES",   "JUROS"),
+    ],
+    "EUR": [
+        (["CPI Flash","Flash CPI","CPI Prelim","CPI y/y"], "CPI — ZONA EURO",  "CPI"),
+        (["Main Refinancing Rate","ECB Rate"],              "BCE — JUROS EUR",  "JUROS"),
+    ],
+    "GBP": [
+        (["CPI y/y","CPI m/m"],        "CPI — UK",         "CPI"),
+        (["Official Bank Rate","BOE"], "BOE — JUROS GBP",  "JUROS"),
+    ],
+    "AUD": [
+        (["CPI q/q","CPI y/y","Trimmed Mean"], "CPI — AUSTRALIA",  "CPI"),
+        (["Cash Rate","RBA Rate"],              "RBA — JUROS AUD",  "JUROS"),
+    ],
+    "JPY": [
+        (["Policy Rate","BOJ Rate","Overnight Call Rate"], "BOJ — JUROS JPY",  "JUROS"),
+    ],
+    "NZD": [
+        (["Official Cash Rate","RBNZ Rate"], "RBNZ — JUROS NZD", "JUROS"),
+    ],
+    "CAD": [
+        (["Overnight Rate","BOC Rate"], "BOC — JUROS CAD", "JUROS"),
+    ],
+}
 
-@st.cache_data(ttl=1800)  # atualiza a cada 30 minutos
-def buscar_eventos_ff():
-    """Busca calendário de alto impacto do ForexFactory via JSON interno."""
+@st.cache_data(ttl=1800)
+def buscar_eventos():
+    if not FCS_KEY:
+        return [], False
+
     agora = datetime.now(timezone.utc)
-    eventos_encontrados = []
-
-    # ForexFactory tem endpoint JSON não oficial mas estável
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://www.forexfactory.com/calendar",
-    }
+    date_from = agora.strftime("%Y-%m-%d")
+    date_to   = (agora + timedelta(days=45)).strftime("%Y-%m-%d")
+    moedas    = "USD,EUR,GBP,AUD,JPY,NZD,CAD"
 
     try:
-        # Busca as próximas 3 semanas
-        for semana_offset in range(0, 4):
-            data_ref = agora + timedelta(weeks=semana_offset)
-            url = f"https://www.forexfactory.com/calendar?week={data_ref.strftime('%b%d.%Y').lower()}"
-            r = requests.get(url, headers=headers, timeout=15)
+        url = "https://api-v4.fcsapi.com/forex/economy_cal"
+        r = requests.get(url, params={
+            "symbol":     moedas,
+            "from_date":  date_from,
+            "to_date":    date_to,
+            "importance": "2",       # alto impacto
+            "access_key": FCS_KEY,
+        }, timeout=15)
 
-            if r.status_code != 200:
+        data = r.json()
+        if not data.get("status") or not data.get("response"):
+            return [], False
+
+        eventos_encontrados = {}
+        for item in data["response"]:
+            titulo  = item.get("title", "") or item.get("event", "")
+            moeda   = item.get("currency", "").upper()
+            data_s  = item.get("date", "")
+
+            if not titulo or not moeda or not data_s:
                 continue
 
-            # Extrai JSON embutido na página
-            match = re.search(r'window\.calendarComponentStates\s*=\s*(\[.*?\]);', r.text, re.DOTALL)
-            if not match:
-                # Tenta outro padrão
-                match = re.search(r'"calendar":\s*(\[.*?\])\s*[,}]', r.text, re.DOTALL)
-
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                    for entry in data:
-                        if not isinstance(entry, dict):
-                            continue
-                        _processar_entry(entry, agora, eventos_encontrados)
-                except Exception:
-                    pass
-
-        # Se scraping falhou, usa fallback com datas aproximadas
-        if not eventos_encontrados:
-            return _fallback_eventos()
-
-        # Remove duplicatas por (cur, tipo), mantém o mais próximo futuro
-        vistos = {}
-        for ev in sorted(eventos_encontrados, key=lambda x: x["data"]):
-            chave = f"{ev['cur']}_{ev['tipo']}"
-            data_ev = ev["data"]
-            if chave not in vistos:
-                vistos[chave] = ev
-            else:
-                # prefere eventos futuros sobre passados
-                if data_ev > agora and vistos[chave]["data"] < agora:
-                    vistos[chave] = ev
-
-        return sorted(vistos.values(), key=lambda x: x["data"])
-
-    except Exception:
-        return _fallback_eventos()
-
-
-def _processar_entry(entry, agora, resultado):
-    """Tenta extrair evento relevante de uma entrada do calendário FF."""
-    titulo = entry.get("name", "") or entry.get("title", "") or entry.get("event", "")
-    moeda  = entry.get("currency", "") or entry.get("cur", "")
-    impact = entry.get("impact", "") or entry.get("impactTitle", "")
-    data_s = entry.get("date", "") or entry.get("dateline", "")
-    hora_s = entry.get("time", "")
-
-    if not titulo or not moeda:
-        return
-    if "high" not in str(impact).lower() and "3" not in str(impact):
-        return  # só alto impacto
-
-    # Tenta parsear data/hora
-    data_ev = _parsear_data(data_s, hora_s)
-    if not data_ev:
-        return
-
-    # Match com eventos alvo
-    for alvo in EVENTOS_ALVO:
-        if moeda.upper() != alvo["cur"]:
-            continue
-        for kw in alvo["keywords"]:
-            if kw.lower() in titulo.lower():
-                resultado.append({
-                    "id":   f"{alvo['cur']}_{alvo['tipo']}_{data_ev.strftime('%Y%m%d')}",
-                    "cur":  alvo["cur"],
-                    "nome": alvo["nome"],
-                    "tipo": alvo["tipo"],
-                    "data": data_ev,
-                    "desc": data_ev.strftime("%d %b · %H:%M UTC").upper(),
-                })
-                return
-
-
-def _parsear_data(data_s, hora_s):
-    """Parseia data e hora do ForexFactory (ET) para UTC."""
-    try:
-        # Tenta timestamp Unix primeiro
-        ts = int(data_s)
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-        return dt
-    except Exception:
-        pass
-
-    try:
-        # Tenta formatos de string
-        for fmt in ["%Y-%m-%d", "%b %d, %Y", "%m/%d/%Y"]:
+            # Parseia data
             try:
-                dt = datetime.strptime(str(data_s), fmt)
-                # ForexFactory usa ET (UTC-5 no inverno, UTC-4 no verão)
-                if hora_s:
-                    for hfmt in ["%I:%M%p", "%I:%M %p", "%H:%M"]:
-                        try:
-                            ht = datetime.strptime(str(hora_s).strip().upper(), hfmt)
-                            dt = dt.replace(hour=ht.hour, minute=ht.minute)
-                            break
-                        except Exception:
-                            pass
-                # Converte ET → UTC (assume UTC-5)
-                return dt.replace(tzinfo=timezone.utc) + timedelta(hours=5)
+                dt = datetime.strptime(data_s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             except Exception:
                 continue
+
+            # Match com keywords
+            for kws, nome, tipo in KEYWORDS.get(moeda, []):
+                if any(kw.lower() in titulo.lower() for kw in kws):
+                    chave = f"{moeda}_{tipo}"
+                    # Mantém o próximo evento futuro; se já tem passado, substitui por futuro
+                    if chave not in eventos_encontrados:
+                        eventos_encontrados[chave] = {
+                            "id": chave, "cur": moeda, "nome": nome, "tipo": tipo,
+                            "data": dt, "desc": dt.strftime("%d %b %Y · %H:%M UTC").upper()
+                        }
+                    else:
+                        existente = eventos_encontrados[chave]["data"]
+                        # Prefere futuro sobre passado, e mais próximo no futuro
+                        if dt > agora and (existente < agora or dt < existente):
+                            eventos_encontrados[chave] = {
+                                "id": chave, "cur": moeda, "nome": nome, "tipo": tipo,
+                                "data": dt, "desc": dt.strftime("%d %b %Y · %H:%M UTC").upper()
+                            }
+                    break
+
+        return sorted(eventos_encontrados.values(), key=lambda x: x["data"]), True
+
     except Exception:
-        pass
-    return None
-
-
-def _fallback_eventos():
-    """Eventos com datas aproximadas caso o scraping falhe."""
-    agora = datetime.now(timezone.utc)
-
-    def prox_sexta_1(h, m):
-        d = agora.replace(hour=h, minute=m, second=0, microsecond=0)
-        dias = (4 - agora.weekday()) % 7
-        if dias == 0 and agora >= d:
-            dias = 7
-        return d + timedelta(days=dias)
-
-    def prox_dia_mes(dia, h, m):
-        d = agora.replace(day=dia, hour=h, minute=m, second=0, microsecond=0)
-        if d <= agora:
-            mes = d.month + 1 if d.month < 12 else 1
-            ano = d.year + (1 if d.month == 12 else 0)
-            d = d.replace(year=ano, month=mes)
-        return d
-
-    return sorted([
-        {"id":"nfp",     "cur":"USD","nome":"NFP / PAYROLL",    "tipo":"PAYROLL","data":prox_sexta_1(13,30), "desc":"1ª SEXTA DO MÊS · 13:30 UTC ⚠ APROX"},
-        {"id":"cpi_usd", "cur":"USD","nome":"CPI — EUA",        "tipo":"CPI",    "data":prox_dia_mes(13,13,30), "desc":"~DIA 13 · 13:30 UTC ⚠ APROX"},
-        {"id":"fomc",    "cur":"USD","nome":"FOMC — JUROS EUA", "tipo":"JUROS",  "data":prox_dia_mes(18,19,0),  "desc":"~DIA 18 · 19:00 UTC ⚠ APROX"},
-        {"id":"cpi_eur", "cur":"EUR","nome":"CPI — ZONA EURO",  "tipo":"CPI",    "data":prox_dia_mes(17,10,0),  "desc":"~DIA 17 · 10:00 UTC ⚠ APROX"},
-        {"id":"bce",     "cur":"EUR","nome":"BCE — JUROS EUR",  "tipo":"JUROS",  "data":prox_dia_mes(6,13,15),  "desc":"~DIA 6 · 13:15 UTC ⚠ APROX"},
-        {"id":"cpi_gbp", "cur":"GBP","nome":"CPI — UK",         "tipo":"CPI",    "data":prox_dia_mes(19,7,0),   "desc":"~DIA 19 · 07:00 UTC ⚠ APROX"},
-        {"id":"boe",     "cur":"GBP","nome":"BOE — JUROS GBP",  "tipo":"JUROS",  "data":prox_dia_mes(5,12,0),   "desc":"~DIA 5 · 12:00 UTC ⚠ APROX"},
-        {"id":"cpi_aud", "cur":"AUD","nome":"CPI — AUSTRÁLIA",  "tipo":"CPI",    "data":prox_dia_mes(25,0,30),  "desc":"~DIA 25 · 00:30 UTC ⚠ APROX"},
-        {"id":"rba",     "cur":"AUD","nome":"RBA — JUROS AUD",  "tipo":"JUROS",  "data":prox_dia_mes(3,3,30),   "desc":"~DIA 3 · 03:30 UTC ⚠ APROX"},
-        {"id":"boj",     "cur":"JPY","nome":"BOJ — JUROS JPY",  "tipo":"JUROS",  "data":prox_dia_mes(24,3,0),   "desc":"~DIA 24 · 03:00 UTC ⚠ APROX"},
-    ], key=lambda x: x["data"])
+        return [], False
 
 # ── CSS ───────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap');
 :root{--bg:#080c10;--surface:#0d1318;--surface2:#111820;--border:#1a2530;--accent:#00e5a0;--red:#ff4558;--yellow:#ffd166;--text:#e8edf2;--muted:#4a5a6a;--muted2:#607a8a;}
-*{box-sizing:border-box;}
 .stApp{background:var(--bg)!important;}
 .block-container{padding:24px 20px 60px!important;max-width:960px!important;}
-h1,h2,h3{color:var(--text)!important;}
 .logo{font-family:'Bebas Neue',sans-serif;font-size:2.2rem;letter-spacing:5px;color:#00e5a0;text-shadow:0 0 30px rgba(0,229,160,.4);}
 .logo em{color:#e8edf2;font-style:normal;}
-.section-lbl{font-family:'DM Mono',monospace;font-size:.6rem;letter-spacing:3px;color:#4a5a6a;margin-bottom:8px;}
-.ev-row{background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-left:3px solid #1a2530;}
-.ev-row.sel{border-left-color:#00e5a0;background:rgba(0,229,160,.04);border-color:rgba(0,229,160,.3);}
-.ev-row.past{opacity:0.45;}
-.ev-cur{font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:3px;padding:4px 10px;border-radius:4px;border:1px solid #1a2530;color:#607a8a;background:#111820;min-width:52px;text-align:center;display:inline-block;}
-.ev-name{font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:2px;color:#e8edf2;}
-.ev-date{font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;margin-top:2px;}
-.ev-cd{font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px;color:#ffd166;text-align:right;}
-.ev-cdlbl{font-family:'DM Mono',monospace;font-size:.52rem;color:#4a5a6a;letter-spacing:2px;text-align:right;}
-.ev-past-lbl{font-family:'Bebas Neue',sans-serif;font-size:1rem;color:#4a5a6a;text-align:right;}
+.slbl{font-family:'DM Mono',monospace;font-size:.6rem;letter-spacing:3px;color:#4a5a6a;margin-bottom:8px;}
+.evrow{background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-left:3px solid #1a2530;}
+.evrow.sel{border-left-color:#00e5a0;background:rgba(0,229,160,.04);border-color:rgba(0,229,160,.3);}
+.evrow.past{opacity:0.4;}
+.evcur{font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:3px;padding:4px 10px;border-radius:4px;border:1px solid #1a2530;color:#607a8a;background:#111820;min-width:52px;text-align:center;display:inline-block;}
+.evnm{font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:2px;color:#e8edf2;}
+.evdt{font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;margin-top:2px;}
+.evcd{font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px;color:#ffd166;text-align:right;}
+.evcdl{font-family:'DM Mono',monospace;font-size:.52rem;color:#4a5a6a;letter-spacing:2px;text-align:right;}
 .badge{font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:4px;padding:8px 22px;border-radius:6px;display:inline-block;}
-.badge-forte{background:rgba(0,229,160,.12);color:#00e5a0;border:1px solid rgba(0,229,160,.35);box-shadow:0 0 24px rgba(0,229,160,.12);}
-.badge-fraco{background:rgba(255,69,88,.12);color:#ff4558;border:1px solid rgba(255,69,88,.35);box-shadow:0 0 24px rgba(255,69,88,.12);}
-.badge-neutro{background:rgba(74,90,106,.2);color:#607a8a;border:1px solid #1a2530;}
-.score-lbl{font-family:'DM Mono',monospace;font-size:.65rem;color:#4a5a6a;text-align:right;margin-top:6px;}
-.ind-title{font-family:'DM Mono',monospace;font-size:.58rem;letter-spacing:3px;color:#4a5a6a;margin-bottom:12px;}
-.ind-name{font-family:'DM Mono',monospace;font-size:.62rem;color:#607a8a;}
-.pair-card{background:#111820;border:1px solid #1a2530;border-radius:6px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;}
-.pair-name{font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:2px;color:#e8edf2;}
-.pair-buy{font-family:'Bebas Neue',sans-serif;font-size:.85rem;padding:3px 8px;border-radius:3px;background:rgba(0,229,160,.12);color:#00e5a0;border:1px solid rgba(0,229,160,.25);}
-.pair-sell{font-family:'Bebas Neue',sans-serif;font-size:.85rem;padding:3px 8px;border-radius:3px;background:rgba(255,69,88,.12);color:#ff4558;border:1px solid rgba(255,69,88,.25);}
-.disclaimer{background:rgba(255,209,102,.04);border:1px solid rgba(255,209,102,.12);border-radius:6px;padding:12px 16px;font-family:'DM Mono',monospace;font-size:.6rem;color:rgba(255,209,102,.6);line-height:1.7;}
-.source-badge{font-family:'DM Mono',monospace;font-size:.55rem;padding:3px 8px;border-radius:3px;display:inline-block;margin-bottom:12px;}
-.source-live{background:rgba(0,229,160,.08);color:#00e5a0;border:1px solid rgba(0,229,160,.2);}
-.source-fallback{background:rgba(255,209,102,.08);color:#ffd166;border:1px solid rgba(255,209,102,.2);}
+.bf{background:rgba(0,229,160,.12);color:#00e5a0;border:1px solid rgba(0,229,160,.35);}
+.bfr{background:rgba(255,69,88,.12);color:#ff4558;border:1px solid rgba(255,69,88,.35);}
+.bn{background:rgba(74,90,106,.2);color:#607a8a;border:1px solid #1a2530;}
+.scl{font-family:'DM Mono',monospace;font-size:.65rem;color:#4a5a6a;text-align:right;margin-top:6px;}
+.itl{font-family:'DM Mono',monospace;font-size:.58rem;letter-spacing:3px;color:#4a5a6a;margin-bottom:12px;}
+.inm{font-family:'DM Mono',monospace;font-size:.62rem;color:#607a8a;}
+.pc{background:#111820;border:1px solid #1a2530;border-radius:6px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.pn{font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:2px;color:#e8edf2;}
+.pb{font-family:'Bebas Neue',sans-serif;font-size:.85rem;padding:3px 8px;border-radius:3px;background:rgba(0,229,160,.12);color:#00e5a0;border:1px solid rgba(0,229,160,.25);}
+.ps{font-family:'Bebas Neue',sans-serif;font-size:.85rem;padding:3px 8px;border-radius:3px;background:rgba(255,69,88,.12);color:#ff4558;border:1px solid rgba(255,69,88,.25);}
+.disc{background:rgba(255,209,102,.04);border:1px solid rgba(255,209,102,.12);border-radius:6px;padding:12px 16px;font-family:'DM Mono',monospace;font-size:.6rem;color:rgba(255,209,102,.6);line-height:1.7;}
 .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#00e5a0;box-shadow:0 0 8px #00e5a0;animation:pulse 2s infinite;}
+.sbadge{font-family:'DM Mono',monospace;font-size:.55rem;padding:3px 8px;border-radius:3px;display:inline-block;margin-bottom:12px;}
+.sl{background:rgba(0,229,160,.08);color:#00e5a0;border:1px solid rgba(0,229,160,.2);}
+.sf{background:rgba(255,209,102,.08);color:#ffd166;border:1px solid rgba(255,209,102,.2);}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 div[data-testid="stVerticalBlock"]{gap:0!important;}
 </style>
@@ -330,168 +207,159 @@ div[data-testid="stVerticalBlock"]{gap:0!important;}
 
 # ── HEADER ────────────────────────────────────────────────────
 agora = datetime.now(timezone.utc)
-col1, col2 = st.columns([3, 1])
-with col1:
+c1, c2 = st.columns([3, 1])
+with c1:
     st.markdown('<div class="logo">Macro<em>Signal</em></div>', unsafe_allow_html=True)
-with col2:
+with c2:
     st.markdown(f"""
     <div style="text-align:right;padding-top:8px;">
       <span class="live-dot"></span>
-      <span style="font-family:'DM Mono',monospace;font-size:.85rem;color:#e8edf2;letter-spacing:2px;margin-left:6px;">
-        {agora.strftime('%H:%M:%S')}
-      </span><br>
+      <span style="font-family:'DM Mono',monospace;font-size:.85rem;color:#e8edf2;letter-spacing:2px;margin-left:6px;">{agora.strftime('%H:%M:%S')}</span><br>
       <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:2px;">UTC · AO VIVO</span>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0 24px;">', unsafe_allow_html=True)
 
+# ── ALERTAS ───────────────────────────────────────────────────
 if not FRED_KEY:
-    st.warning("⚠️ **FRED_API_KEY não configurada.** Vá em Settings → Secrets no Streamlit Cloud.", icon="🔑")
+    st.warning("FRED_API_KEY nao configurada. Va em Settings > Secrets.", icon="🔑")
+if not FCS_KEY:
+    st.warning("FCS_API_KEY nao configurada. Cadastre em fcsapi.com e adicione em Settings > Secrets.", icon="📅")
 
 # ── BUSCAR EVENTOS ────────────────────────────────────────────
-with st.spinner("🔄 Buscando calendário econômico..."):
-    EVENTOS = buscar_eventos_ff()
+with st.spinner("Buscando calendario economico..."):
+    EVENTOS, sucesso = buscar_eventos()
 
-# Detecta se veio do scraping real ou fallback
-usando_fallback = any("⚠ APROX" in ev["desc"] for ev in EVENTOS)
-badge_src = "source-fallback" if usando_fallback else "source-live"
-txt_src   = "⚠ DATAS APROXIMADAS — SCRAPING INDISPONÍVEL" if usando_fallback else "✓ FOREXFACTORY · CALENDÁRIO AO VIVO"
-st.markdown(f'<div class="source-badge {badge_src}">{txt_src}</div>', unsafe_allow_html=True)
+if sucesso and EVENTOS:
+    st.markdown('<div class="sbadge sl">FCS API - CALENDARIO AO VIVO</div>', unsafe_allow_html=True)
+elif not FCS_KEY:
+    st.markdown('<div class="sbadge sf">CONFIGURE FCS_API_KEY PARA CALENDARIO AO VIVO</div>', unsafe_allow_html=True)
+    EVENTOS = []
+else:
+    st.markdown('<div class="sbadge sf">ERRO NA FCS API - TENTE NOVAMENTE</div>', unsafe_allow_html=True)
+    EVENTOS = []
 
-# ── SELECIONAR EVENTO ─────────────────────────────────────────
-if "evento_idx" not in st.session_state:
-    # Seleciona automaticamente o próximo evento futuro
-    idx_futuro = next((i for i, ev in enumerate(EVENTOS) if ev["data"] > agora), 0)
-    st.session_state.evento_idx = idx_futuro
+# ── SELEÇÃO DE EVENTO ─────────────────────────────────────────
+if EVENTOS:
+    if "evento_idx" not in st.session_state:
+        idx = next((i for i, e in enumerate(EVENTOS) if e["data"] > agora), 0)
+        st.session_state.evento_idx = idx
 
-st.markdown('<div class="section-lbl">PRÓXIMOS EVENTOS DE ALTO IMPACTO</div>', unsafe_allow_html=True)
+    st.markdown('<div class="slbl">PROXIMOS EVENTOS DE ALTO IMPACTO</div>', unsafe_allow_html=True)
 
-DIAS  = ["SEG","TER","QUA","QUI","SEX","SÁB","DOM"]
-MESES = ["JAN","FEV","MAR","ABR","MAI","JUN","JUL","AGO","SET","OUT","NOV","DEZ"]
+    DIAS  = ["SEG","TER","QUA","QUI","SEX","SAB","DOM"]
+    MESES = ["JAN","FEV","MAR","ABR","MAI","JUN","JUL","AGO","SET","OUT","NOV","DEZ"]
 
-for i, ev in enumerate(EVENTOS):
-    diff  = ev["data"] - agora
-    total = int(diff.total_seconds())
-    past  = total <= 0
+    for i, ev in enumerate(EVENTOS):
+        diff  = ev["data"] - agora
+        total = int(diff.total_seconds())
+        past  = total <= 0
 
-    if past:
-        cd_html = f'<div class="ev-past-lbl">ENCERRADO</div>'
-    elif total < 86400 * 2:
-        h, rem = divmod(total, 3600)
-        m, s   = divmod(rem, 60)
-        cd_html = f'<div class="ev-cd">{h:02d}:{m:02d}:{s:02d}</div><div class="ev-cdlbl">ATÉ O EVENTO</div>'
-    else:
-        dias = total // 86400
-        h    = (total % 86400) // 3600
-        cd_html = f'<div class="ev-cd">{dias}D {h:02d}H</div><div class="ev-cdlbl">ATÉ O EVENTO</div>'
+        if past:
+            cd = '<span style="font-family:Bebas Neue,sans-serif;font-size:1rem;color:#4a5a6a;">ENCERRADO</span>'
+        elif total < 172800:
+            h, rem = divmod(total, 3600)
+            m, s   = divmod(rem, 60)
+            cd = f'<div class="evcd">{h:02d}:{m:02d}:{s:02d}</div><div class="evcdl">ATE O EVENTO</div>'
+        else:
+            dias = total // 86400
+            h    = (total % 86400) // 3600
+            cd = f'<div class="evcd">{dias}D {h:02d}H</div><div class="evcdl">ATE O EVENTO</div>'
 
-    dt  = ev["data"]
-    sel = "sel" if i == st.session_state.evento_idx else ""
-    past_cls = "past" if past else ""
-    fmt = f"{DIAS[dt.weekday()]} · {dt.day:02d} {MESES[dt.month-1]} · {dt.hour:02d}:{dt.minute:02d} UTC"
+        dt   = ev["data"]
+        sel  = "sel" if i == st.session_state.evento_idx else ""
+        pcls = "past" if past else ""
+        fmt  = f"{DIAS[dt.weekday()]} {dt.day:02d} {MESES[dt.month-1]} - {dt.hour:02d}:{dt.minute:02d} UTC"
 
-    st.markdown(f"""
-    <div class="ev-row {sel} {past_cls}">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <span class="ev-cur">{ev['cur']}</span>
-        <div>
-          <div class="ev-name">{ev['nome']}</div>
-          <div class="ev-date">{fmt} · {ev['desc']}</div>
-        </div>
-      </div>
-      <div>{cd_html}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# Selectbox para escolher evento
-nomes_eventos = [f"{e['cur']} — {e['nome']}" for e in EVENTOS]
-escolha = st.selectbox("Selecione o evento para analisar:", nomes_eventos, index=st.session_state.evento_idx)
-st.session_state.evento_idx = nomes_eventos.index(escolha)
-
-# ── ANÁLISE DO EVENTO SELECIONADO ────────────────────────────
-ev = EVENTOS[st.session_state.evento_idx]
-
-st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
-st.markdown('<div class="section-lbl">ANÁLISE DO EVENTO SELECIONADO</div>', unsafe_allow_html=True)
-
-with st.spinner("Buscando dados na FRED API..."):
-    score, indicadores = calcular_score(ev["tipo"])
-
-verd = veredicto(score)
-bc   = f"badge-{verd.lower()}"
-port = get_portfolio(ev["cur"])
-
-col_a, col_b = st.columns([1, 1])
-with col_a:
-    st.markdown(f"""
-    <div style="padding:8px 0">
-      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.6rem;letter-spacing:6px;color:#e8edf2;">{ev['cur']}</div>
-      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:#607a8a;letter-spacing:2px;margin-top:4px;">{ev['nome']}</div>
-    </div>
-    """, unsafe_allow_html=True)
-with col_b:
-    st.markdown(f"""
-    <div style="text-align:right;padding:8px 0">
-      <div class="badge {bc}">{verd}</div>
-      <div class="score-lbl">SCORE: {'+' if score>=0 else ''}{score:.3f}</div>
-      <div class="score-lbl" style="margin-top:4px;font-size:.52rem;">{'⚡ DADOS REAIS · FRED API' if FRED_KEY else '⚠ SEM API KEY'}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown('<hr style="border-color:#1a2530;margin:12px 0;">', unsafe_allow_html=True)
-st.markdown('<div class="ind-title">INDICADORES ANTECEDENTES — DADOS REAIS FRED</div>', unsafe_allow_html=True)
-
-for ind in indicadores:
-    val = ind["valor"]
-    pct = min(100, abs(val) * 100)
-    cor = "#00e5a0" if val > 0.05 else "#ff4558" if val < -0.05 else "#607a8a"
-    arr = "▲" if val > 0.05 else "▼" if val < -0.05 else "→"
-
-    col_n, col_b2, col_a2 = st.columns([3, 6, 1])
-    with col_n:
-        st.markdown(f'<div class="ind-name" style="padding-top:4px;">{ind["nome"]}</div>', unsafe_allow_html=True)
-    with col_b2:
         st.markdown(f"""
-        <div style="margin-top:8px;height:3px;background:#1a2530;border-radius:2px;">
-          <div style="width:{pct:.0f}%;height:100%;background:{cor};border-radius:2px;"></div>
+        <div class="evrow {sel} {pcls}">
+          <div style="display:flex;align-items:center;gap:14px;">
+            <span class="evcur">{ev['cur']}</span>
+            <div>
+              <div class="evnm">{ev['nome']}</div>
+              <div class="evdt">{fmt}</div>
+            </div>
+          </div>
+          <div>{cd}</div>
         </div>
         """, unsafe_allow_html=True)
-    with col_a2:
-        st.markdown(f'<div style="font-family:DM Mono,monospace;font-size:.65rem;color:{cor};text-align:right;padding-top:2px;">{arr}</div>', unsafe_allow_html=True)
 
-st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
+    # Seletor simples para trocar evento
+    st.markdown("<br>", unsafe_allow_html=True)
+    opcoes = [f"{e['cur']} - {e['nome']} ({e['data'].strftime('%d/%m %H:%M')})" for e in EVENTOS]
+    escolha = st.selectbox("Selecionar evento para analise:", opcoes, index=st.session_state.evento_idx)
+    st.session_state.evento_idx = opcoes.index(escolha)
 
-correlato = CORRELATOS.get(ev["cur"], "—")
-if verd == "NEUTRO":
+    ev = EVENTOS[st.session_state.evento_idx]
+
+    # ── ANÁLISE ───────────────────────────────────────────────
+    st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
+    st.markdown('<div class="slbl">ANALISE DO EVENTO SELECIONADO</div>', unsafe_allow_html=True)
+
+    with st.spinner("Buscando dados FRED..."):
+        score, inds = calcular_score(ev["tipo"])
+
+    verd = veredicto(score)
+    bc   = "bf" if verd == "FORTE" else "bfr" if verd == "FRACO" else "bn"
+    port = get_portfolio(ev["cur"])
+
+    ca, cb = st.columns([1, 1])
+    with ca:
+        st.markdown(f"""
+        <div style="padding:8px 0">
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:2.6rem;letter-spacing:6px;color:#e8edf2;">{ev['cur']}</div>
+          <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:#607a8a;letter-spacing:2px;margin-top:4px;">{ev['nome']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with cb:
+        st.markdown(f"""
+        <div style="text-align:right;padding:8px 0">
+          <div class="badge {bc}">{verd}</div>
+          <div class="scl">SCORE: {'+' if score >= 0 else ''}{score:.3f}</div>
+          <div class="scl" style="font-size:.5rem;">{'DADOS REAIS FRED API' if FRED_KEY else 'SEM FRED API KEY'}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<hr style="border-color:#1a2530;margin:12px 0;">', unsafe_allow_html=True)
+    st.markdown('<div class="itl">INDICADORES ANTECEDENTES</div>', unsafe_allow_html=True)
+
+    for ind in inds:
+        val = ind["valor"]
+        pct = min(100, abs(val) * 100)
+        cor = "#00e5a0" if val > 0.05 else "#ff4558" if val < -0.05 else "#607a8a"
+        arr = "A" if val > 0.05 else "V" if val < -0.05 else "-"
+        cn, cb2, ca2 = st.columns([3, 6, 1])
+        with cn:
+            st.markdown(f'<div class="inm" style="padding-top:4px;">{ind["nome"]}</div>', unsafe_allow_html=True)
+        with cb2:
+            st.markdown(f'<div style="margin-top:8px;height:3px;background:#1a2530;border-radius:2px;"><div style="width:{pct:.0f}%;height:100%;background:{cor};border-radius:2px;"></div></div>', unsafe_allow_html=True)
+        with ca2:
+            st.markdown(f'<div style="font-family:DM Mono,monospace;font-size:.65rem;color:{cor};text-align:right;padding-top:2px;">{arr}</div>', unsafe_allow_html=True)
+
+    st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
+    correlato = CORRELATOS.get(ev["cur"], "-")
+
+    if verd == "NEUTRO":
+        st.markdown('<div style="text-align:center;font-family:DM Mono,monospace;font-size:.7rem;color:#4a5a6a;padding:24px;background:#0d1318;border:1px solid #1a2530;border-radius:8px;line-height:1.8;">SINAL NEUTRO - INDICADORES CONTRADITORIOS<br>MELHOR AGUARDAR ESTE EVENTO</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="itl">PORTFOLIO - {ev["cur"]} vs DEMAIS (SEM {correlato})</div>', unsafe_allow_html=True)
+        cols = st.columns(3)
+        for j, par in enumerate(port):
+            dp  = direcao_par(par, ev["cur"], verd)
+            cls = "pb" if dp == "BUY" else "ps"
+            with cols[j % 3]:
+                st.markdown(f'<div class="pc"><span class="pn">{par[:3]}/{par[3:]}</span><span class="{cls}">{dp}</span></div>', unsafe_allow_html=True)
+
+    st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
     st.markdown("""
-    <div style="text-align:center;font-family:'DM Mono',monospace;font-size:.7rem;color:#4a5a6a;padding:24px;background:#0d1318;border:1px solid #1a2530;border-radius:8px;line-height:1.8;">
-      SINAL NEUTRO — INDICADORES CONTRADITÓRIOS<br>MELHOR AGUARDAR ESTE EVENTO
+    <div class="disc">
+      Calendario via FCS API (tempo real). Scores calculados com dados historicos da FRED API.
+      Nao constitui recomendacao de investimento. Toda decisao e de sua exclusiva responsabilidade.
+    </div>
+    <div style="text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;letter-spacing:2px;padding:16px 0;">
+      MacroSignal - <span style="color:#00e5a0;">Analise Fundamentalista</span> - FCS API + FRED API
     </div>
     """, unsafe_allow_html=True)
-else:
-    st.markdown(f'<div class="ind-title">PORTFÓLIO — {ev["cur"]} vs DEMAIS (EXCLUINDO {correlato})</div>', unsafe_allow_html=True)
-    cols = st.columns(3)
-    for j, par in enumerate(port):
-        dir_par = direcao_par(par, ev["cur"], verd)
-        cls_dir = "pair-buy" if dir_par == "BUY" else "pair-sell"
-        with cols[j % 3]:
-            st.markdown(f"""
-            <div class="pair-card" style="margin-bottom:8px;">
-              <span class="pair-name">{par[:3]}/{par[3:]}</span>
-              <span class="{cls_dir}">{dir_par}</span>
-            </div>
-            """, unsafe_allow_html=True)
-
-st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
-st.markdown("""
-<div class="disclaimer">
-  ⚠ Calendário via ForexFactory (scraping automático). Scores calculados com dados históricos da FRED API.
-  Não constitui recomendação de investimento. Toda decisão é de sua exclusiva responsabilidade.
-</div>
-<div style="text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;letter-spacing:2px;padding:16px 0;">
-  MacroSignal · <span style="color:#00e5a0;">Análise Fundamentalista</span> · ForexFactory + FRED API
-</div>
-""", unsafe_allow_html=True)
 
 st.markdown('<meta http-equiv="refresh" content="1800">', unsafe_allow_html=True)
