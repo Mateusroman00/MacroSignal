@@ -152,22 +152,24 @@ def prox_primeira_sexta(h, m):
     return candidata
 
 # ── DATAS REAIS — ATUALIZAR 1x POR MÊS ──────────────────────
-# Fonte: forexfactory.com ou investing.com/economic-calendar
+# Fonte: forexfactory.com (High Impact only)
+# Horários em UTC (ForexFactory mostra em ET — somar 5h no inverno, 4h no verão)
 # Para atualizar: troque os valores de d(ANO, MÊS, DIA, HORA, MIN)
 def d(ano, mes, dia, hora, minuto):
     return datetime(ano, mes, dia, hora, minuto, 0, tzinfo=timezone.utc)
 
 EVENTOS = sorted([
-    {"id":"nfp",     "cur":"USD","nome":"NFP / PAYROLL",    "tipo":"PAYROLL","data":d(2026, 2,20,13,30), "desc":"20 FEV · 13:30 UTC"},
-    {"id":"boj",     "cur":"JPY","nome":"BOJ — JUROS JPY",  "tipo":"JUROS",  "data":d(2026, 2,24, 3, 0), "desc":"24 FEV · 03:00 UTC"},
-    {"id":"cpi_aud", "cur":"AUD","nome":"CPI — AUSTRÁLIA",  "tipo":"CPI",    "data":d(2026, 2,25, 0,30), "desc":"25 FEV · 00:30 UTC"},
-    {"id":"rba",     "cur":"AUD","nome":"RBA — JUROS AUD",  "tipo":"JUROS",  "data":d(2026, 3, 3, 3,30), "desc":"03 MAR · 03:30 UTC"},
-    {"id":"boe",     "cur":"GBP","nome":"BOE — JUROS GBP",  "tipo":"JUROS",  "data":d(2026, 3, 5,12, 0), "desc":"05 MAR · 12:00 UTC"},
-    {"id":"bce",     "cur":"EUR","nome":"BCE — JUROS EUR",  "tipo":"JUROS",  "data":d(2026, 3, 6,13,15), "desc":"06 MAR · 13:15 UTC"},
-    {"id":"cpi_gbp", "cur":"GBP","nome":"CPI — UK",         "tipo":"CPI",    "data":d(2026, 3,18, 7, 0), "desc":"18 MAR · 07:00 UTC"},
-    {"id":"fomc",    "cur":"USD","nome":"FOMC — JUROS EUA", "tipo":"JUROS",  "data":d(2026, 3,18,19, 0), "desc":"18 MAR · 19:00 UTC"},
-    {"id":"cpi_usd", "cur":"USD","nome":"CPI — EUA",        "tipo":"CPI",    "data":d(2026, 3,25,13,30), "desc":"25 MAR · 13:30 UTC"},
-    {"id":"cpi_eur", "cur":"EUR","nome":"CPI — ZONA EURO",  "tipo":"CPI",    "data":d(2026, 3,31,10, 0), "desc":"31 MAR · 10:00 UTC"},
+    # ── JÁ OCORRERAM (ficam no fim da lista pois data < agora) ──
+    {"id":"rba",     "cur":"AUD","nome":"RBA — JUROS AUD",  "tipo":"JUROS",  "data":d(2026, 2, 3, 5,30),  "desc":"03 FEV · 05:30 UTC"},
+    {"id":"boe",     "cur":"GBP","nome":"BOE — JUROS GBP",  "tipo":"JUROS",  "data":d(2026, 2, 5,14, 0),  "desc":"05 FEV · 14:00 UTC"},
+    {"id":"bce",     "cur":"EUR","nome":"BCE — JUROS EUR",  "tipo":"JUROS",  "data":d(2026, 2, 5,15,15),  "desc":"05 FEV · 15:15 UTC"},
+    {"id":"nfp",     "cur":"USD","nome":"NFP / PAYROLL",    "tipo":"PAYROLL","data":d(2026, 2,11,15,30),  "desc":"11 FEV · 15:30 UTC"},
+    {"id":"cpi_usd", "cur":"USD","nome":"CPI — EUA",        "tipo":"CPI",    "data":d(2026, 2,13,15,30),  "desc":"13 FEV · 15:30 UTC"},
+    {"id":"cpi_gbp", "cur":"GBP","nome":"CPI — UK",         "tipo":"CPI",    "data":d(2026, 2,18, 9, 0),  "desc":"18 FEV · 09:00 UTC"},
+    {"id":"fomc_min","cur":"USD","nome":"FOMC — MINUTES",   "tipo":"JUROS",  "data":d(2026, 2,18,21, 0),  "desc":"18 FEV · 21:00 UTC"},
+    # ── PRÓXIMOS ────────────────────────────────────────────────
+    {"id":"cpi_aud", "cur":"AUD","nome":"CPI — AUSTRÁLIA",  "tipo":"CPI",    "data":d(2026, 2,24, 0,30),  "desc":"24 FEV · 00:30 UTC"},
+    {"id":"cpi_eur", "cur":"EUR","nome":"CPI — ZONA EURO",  "tipo":"CPI",    "data":d(2026, 2,27,10, 0),  "desc":"27 FEV · 10:00 UTC (prelim)"},
 ], key=lambda x: x["data"])
 
 # ── CSS ───────────────────────────────────────────────────────
