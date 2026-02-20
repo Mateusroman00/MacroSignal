@@ -391,20 +391,107 @@ for i, ev in enumerate(EVENTOS):
     past_cls = "past" if past else ""
     fmt = f"{DIAS[dt.weekday()]} · {dt.day:02d} {MESES[dt.month-1]} · {dt.hour:02d}:{dt.minute:02d} UTC"
 
-    col_ev, col_btn = st.columns([10, 1])
-    with col_ev:
+    st.markdown(f"""
+    <div class="ev-row {sel} {past_cls}">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <span class="ev-cur">{ev['cur']}</span>
+        <div>
+          <div class="ev-name">{ev['nome']}</div>
+          <div class="ev-date">{fmt} · {ev['desc']}</div>
+        </div>
+      </div>
+      <div>{cd_html}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Selectbox para escolher evento
+nomes_eventos = [f"{e['cur']} — {e['nome']}" for e in EVENTOS]
+escolha = st.selectbox("Selecione o evento para analisar:", nomes_eventos, index=st.session_state.evento_idx)
+st.session_state.evento_idx = nomes_eventos.index(escolha)
+
+# ── ANÁLISE DO EVENTO SELECIONADO ────────────────────────────
+ev = EVENTOS[st.session_state.evento_idx]
+
+st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
+st.markdown('<div class="section-lbl">ANÁLISE DO EVENTO SELECIONADO</div>', unsafe_allow_html=True)
+
+with st.spinner("Buscando dados na FRED API..."):
+    score, indicadores = calcular_score(ev["tipo"])
+
+verd = veredicto(score)
+bc   = f"badge-{verd.lower()}"
+port = get_portfolio(ev["cur"])
+
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    st.markdown(f"""
+    <div style="padding:8px 0">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.6rem;letter-spacing:6px;color:#e8edf2;">{ev['cur']}</div>
+      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:#607a8a;letter-spacing:2px;margin-top:4px;">{ev['nome']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col_b:
+    st.markdown(f"""
+    <div style="text-align:right;padding:8px 0">
+      <div class="badge {bc}">{verd}</div>
+      <div class="score-lbl">SCORE: {'+' if score>=0 else ''}{score:.3f}</div>
+      <div class="score-lbl" style="margin-top:4px;font-size:.52rem;">{'⚡ DADOS REAIS · FRED API' if FRED_KEY else '⚠ SEM API KEY'}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown('<hr style="border-color:#1a2530;margin:12px 0;">', unsafe_allow_html=True)
+st.markdown('<div class="ind-title">INDICADORES ANTECEDENTES — DADOS REAIS FRED</div>', unsafe_allow_html=True)
+
+for ind in indicadores:
+    val = ind["valor"]
+    pct = min(100, abs(val) * 100)
+    cor = "#00e5a0" if val > 0.05 else "#ff4558" if val < -0.05 else "#607a8a"
+    arr = "▲" if val > 0.05 else "▼" if val < -0.05 else "→"
+
+    col_n, col_b2, col_a2 = st.columns([3, 6, 1])
+    with col_n:
+        st.markdown(f'<div class="ind-name" style="padding-top:4px;">{ind["nome"]}</div>', unsafe_allow_html=True)
+    with col_b2:
         st.markdown(f"""
-        <div class="ev-row {sel} {past_cls}">
-          <div style="display:flex;align-items:center;gap:14px;">
-            <span class="ev-cur">{ev['cur']}</span>
-            <div>
-              <div class="ev-name">{ev['nome']}</div>
-              <div class="ev-date">{fmt} · {ev['desc']}</div>
-            </div>
-          </div>
-          <div>{cd_html}</div>
+        <div style="margin-top:8px;height:3px;background:#1a2530;border-radius:2px;">
+          <div style="width:{pct:.0f}%;height:100%;background:{cor};border-radius:2px;"></div>
         </div>
         """, unsafe_allow_html=True)
-    with col_btn:
-        st.markdown('<div style="padding-top:6px;">', unsafe_allow_html=True)
-        if st.button(
+    with col_a2:
+        st.markdown(f'<div style="font-family:DM Mono,monospace;font-size:.65rem;color:{cor};text-align:right;padding-top:2px;">{arr}</div>', unsafe_allow_html=True)
+
+st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
+
+correlato = CORRELATOS.get(ev["cur"], "—")
+if verd == "NEUTRO":
+    st.markdown("""
+    <div style="text-align:center;font-family:'DM Mono',monospace;font-size:.7rem;color:#4a5a6a;padding:24px;background:#0d1318;border:1px solid #1a2530;border-radius:8px;line-height:1.8;">
+      SINAL NEUTRO — INDICADORES CONTRADITÓRIOS<br>MELHOR AGUARDAR ESTE EVENTO
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown(f'<div class="ind-title">PORTFÓLIO — {ev["cur"]} vs DEMAIS (EXCLUINDO {correlato})</div>', unsafe_allow_html=True)
+    cols = st.columns(3)
+    for j, par in enumerate(port):
+        dir_par = direcao_par(par, ev["cur"], verd)
+        cls_dir = "pair-buy" if dir_par == "BUY" else "pair-sell"
+        with cols[j % 3]:
+            st.markdown(f"""
+            <div class="pair-card" style="margin-bottom:8px;">
+              <span class="pair-name">{par[:3]}/{par[3:]}</span>
+              <span class="{cls_dir}">{dir_par}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
+st.markdown("""
+<div class="disclaimer">
+  ⚠ Calendário via ForexFactory (scraping automático). Scores calculados com dados históricos da FRED API.
+  Não constitui recomendação de investimento. Toda decisão é de sua exclusiva responsabilidade.
+</div>
+<div style="text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;letter-spacing:2px;padding:16px 0;">
+  MacroSignal · <span style="color:#00e5a0;">Análise Fundamentalista</span> · ForexFactory + FRED API
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown('<meta http-equiv="refresh" content="1800">', unsafe_allow_html=True)
