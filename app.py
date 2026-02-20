@@ -391,22 +391,20 @@ for i, ev in enumerate(EVENTOS):
     past_cls = "past" if past else ""
     fmt = f"{DIAS[dt.weekday()]} · {dt.day:02d} {MESES[dt.month-1]} · {dt.hour:02d}:{dt.minute:02d} UTC"
 
-    clicked = st.button(f"ev_{i}", key=f"btn_{i}", use_container_width=True, label_visibility="collapsed")
-    st.markdown(f"""
-    <div class="ev-row {sel} {past_cls}">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <span class="ev-cur">{ev['cur']}</span>
-        <div>
-          <div class="ev-name">{ev['nome']}</div>
-          <div class="ev-date">{fmt} · {ev['desc']}</div>
+    col_ev, col_btn = st.columns([10, 1])
+    with col_ev:
+        st.markdown(f"""
+        <div class="ev-row {sel} {past_cls}">
+          <div style="display:flex;align-items:center;gap:14px;">
+            <span class="ev-cur">{ev['cur']}</span>
+            <div>
+              <div class="ev-name">{ev['nome']}</div>
+              <div class="ev-date">{fmt} · {ev['desc']}</div>
+            </div>
+          </div>
+          <div>{cd_html}</div>
         </div>
-      </div>
-      <div>{cd_html}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if clicked:
-        st.session_state.evento_idx = i
-        st.rerun()
-
-# ── ANÁLISE DO EVENTO SELECIONADO ─────
+        """, unsafe_allow_html=True)
+    with col_btn:
+        st.markdown('<div style="padding-top:6px;">', unsafe_allow_html=True)
+        if st.button(
