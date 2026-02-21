@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-import plotly.graph_objects as go
+import pandas as pd
 from datetime import datetime, timezone
 
 st.set_page_config(page_title="MacroSignal", page_icon="📡", layout="wide", initial_sidebar_state="collapsed")
@@ -161,30 +161,23 @@ def calcular_score(tipo):
 def calcular_historico_score(tipo, n_periodos=12):
     series = SERIES.get(tipo, [])
     pesos  = PESOS.get(tipo, [])
-
     cache_series = {}
     for sid, _ in series:
         obs = fred_obs(sid, limit=n_periodos + 8)
         if obs:
             cache_series[sid] = obs
-
     if not cache_series:
         return []
-
     sid_ref   = max(cache_series, key=lambda s: len(cache_series[s]))
     datas_ref = [d for d, _ in cache_series[sid_ref]]
-
     inicio = max(2, len(datas_ref) - n_periodos)
-    datas_calcular = datas_ref[inicio:]
-
     resultado = []
-    for data_atual in datas_calcular:
+    for data_atual in datas_ref[inicio:]:
         score_t = 0.0
         total_w = 0.0
         for i, (sid, direcao) in enumerate(series):
             w    = pesos[i] if i < len(pesos) else 10
-            obs  = cache_series.get(sid, [])
-            vals = [v for d, v in obs if d <= data_atual]
+            vals = [v for d, v in cache_series.get(sid, []) if d <= data_atual]
             if len(vals) < 2:
                 continue
             val      = delta_de_lista(vals, direcao)
@@ -192,10 +185,8 @@ def calcular_historico_score(tipo, n_periodos=12):
             total_w  += w
         if total_w > 0:
             resultado.append((data_atual, round(score_t / total_w, 3)))
-
     return resultado
 
-# ── FX ────────────────────────────────────────────────────────
 ORDEM_FX   = {"EUR":0,"GBP":1,"AUD":2,"NZD":3,"USD":4,"CAD":5,"CHF":6,"JPY":7}
 CORRELATOS = {"USD":"CAD","CAD":"USD","AUD":"NZD","NZD":"AUD","EUR":"GBP","GBP":"EUR","CHF":"JPY","JPY":"CHF"}
 TODAS_MOE  = ["USD","EUR","GBP","AUD","NZD","CAD","CHF","JPY"]
@@ -214,150 +205,11 @@ def direcao_par(par, cur, verd):
     forte = verd == "FORTE"
     return ("BUY" if forte else "SELL") if par[:3] == cur else ("SELL" if forte else "BUY")
 
-# ── GRÁFICO PLOTLY ────────────────────────────────────────────
-def gerar_grafico_plotly(historico):
-    if not historico or len(historico) < 2:
-        return None
-
-    datas  = [h[0] for h in historico]
-    scores = [h[1] for h in historico]
-
-    # Separar para área colorida acima/abaixo do zero
-    scores_pos = [s if s >= 0 else 0 for s in scores]
-    scores_neg = [s if s <= 0 else 0 for s in scores]
-
-    cor_ultima = "#00e5a0" if scores[-1] >= 0 else "#ff4558"
-
-    fig = go.Figure()
-
-    # Área positiva (verde)
-    fig.add_trace(go.Scatter(
-        x=datas, y=scores_pos,
-        fill="tozeroy",
-        fillcolor="rgba(0,229,160,0.12)",
-        line=dict(width=0),
-        showlegend=False,
-        hoverinfo="skip",
-    ))
-
-    # Área negativa (vermelha)
-    fig.add_trace(go.Scatter(
-        x=datas, y=scores_neg,
-        fill="tozeroy",
-        fillcolor="rgba(255,69,88,0.12)",
-        line=dict(width=0),
-        showlegend=False,
-        hoverinfo="skip",
-    ))
-
-    # Linha colorida por segmento (verde quando positivo, vermelho quando negativo)
-    for i in range(len(scores) - 1):
-        mid = (scores[i] + scores[i + 1]) / 2
-        cor = "#00e5a0" if mid >= 0 else "#ff4558"
-        fig.add_trace(go.Scatter(
-            x=[datas[i], datas[i + 1]],
-            y=[scores[i], scores[i + 1]],
-            mode="lines",
-            line=dict(color=cor, width=2.5),
-            showlegend=False,
-            hoverinfo="skip",
-        ))
-
-    # Pontos em cada período
-    cores_pontos = ["#00e5a0" if s >= 0 else "#ff4558" for s in scores]
-    tamanhos     = [10 if i == len(scores) - 1 else 6 for i in range(len(scores))]
-    fig.add_trace(go.Scatter(
-        x=datas, y=scores,
-        mode="markers",
-        marker=dict(
-            color=cores_pontos,
-            size=tamanhos,
-            line=dict(color="#080c10", width=1.5),
-        ),
-        text=[f"{s:+.3f}" for s in scores],
-        hovertemplate="<b>%{x}</b><br>Score: %{text}<extra></extra>",
-        showlegend=False,
-    ))
-
-    # Linha zero de referência
-    fig.add_hline(
-        y=0,
-        line=dict(color="#2a3a4a", width=1, dash="dot"),
-    )
-
-    # Anotação do último valor destacado
-    fig.add_annotation(
-        x=datas[-1], y=scores[-1],
-        text=f"<b>{scores[-1]:+.3f}</b>",
-        showarrow=True,
-        arrowhead=0,
-        arrowcolor=cor_ultima,
-        arrowwidth=1,
-        ax=0, ay=-34,
-        font=dict(color=cor_ultima, size=12, family="DM Mono, monospace"),
-        bgcolor="#080c10",
-        bordercolor=cor_ultima,
-        borderwidth=1,
-        borderpad=5,
-    )
-
-    # Variação vs anterior
-    if len(scores) >= 2:
-        diff     = scores[-1] - scores[-2]
-        seta     = "▲" if diff > 0.001 else "▼" if diff < -0.001 else "●"
-        cor_diff = "#00e5a0" if diff > 0.001 else "#ff4558" if diff < -0.001 else "#4a5a6a"
-        fig.add_annotation(
-            x=datas[0], y=max(scores) + (max(scores) - min(scores)) * 0.15,
-            text=f"<span style='color:{cor_diff}'>{seta} {diff:+.3f} vs anterior</span>",
-            showarrow=False,
-            font=dict(color=cor_diff, size=10, family="DM Mono, monospace"),
-            xanchor="left",
-        )
-
-    margem = max(0.12, (max(scores) - min(scores)) * 0.22)
-    y_min  = min(min(scores) - margem, -0.28)
-    y_max  = max(max(scores) + margem,  0.28)
-
-    fig.update_layout(
-        height=280,
-        margin=dict(l=55, r=20, t=30, b=45),
-        paper_bgcolor="#0d1318",
-        plot_bgcolor="#0d1318",
-        font=dict(family="DM Mono, monospace", color="#4a5a6a", size=10),
-        xaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            tickfont=dict(color="#3a4a5a", size=9, family="DM Mono, monospace"),
-            linecolor="#1a2530",
-            tickcolor="#1a2530",
-            tickangle=-30,
-        ),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor="#0f1820",
-            zeroline=False,
-            tickfont=dict(color="#4a5a6a", size=9, family="DM Mono, monospace"),
-            linecolor="#1a2530",
-            range=[y_min, y_max],
-            tickformat="+.2f",
-            title=dict(text="SCORE", font=dict(color="#2a3540", size=9), standoff=8),
-        ),
-        hovermode="x unified",
-        hoverlabel=dict(
-            bgcolor="#111820",
-            bordercolor="#1a2530",
-            font=dict(color="#e8edf2", size=11, family="DM Mono, monospace"),
-        ),
-    )
-
-    return fig
-
-
 # ── CSS ───────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap');
-:root{--bg:#080c10;--surface:#0d1318;--surface2:#111820;--border:#1a2530;--accent:#00e5a0;--red:#ff4558;--yellow:#ffd166;--text:#e8edf2;--muted:#4a5a6a;--muted2:#607a8a;}
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap');
+:root{--bg:#080c10;--surface:#0d1318;--border:#1a2530;--accent:#00e5a0;--red:#ff4558;--text:#e8edf2;--muted:#4a5a6a;--muted2:#607a8a;}
 .stApp{background:var(--bg)!important;}
 .block-container{padding:24px 20px 60px!important;max-width:980px!important;}
 .logo{font-family:'Bebas Neue',sans-serif;font-size:2.2rem;letter-spacing:5px;color:#00e5a0;text-shadow:0 0 30px rgba(0,229,160,.4);}
@@ -378,7 +230,9 @@ st.markdown("""
 .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#00e5a0;box-shadow:0 0 8px #00e5a0;animation:pulse 2s infinite;}
 div[data-testid="stSelectbox"] label{font-family:'DM Mono',monospace!important;font-size:.6rem!important;letter-spacing:3px!important;color:#4a5a6a!important;}
 div[data-testid="stSelectbox"] > div > div{background:#0d1318!important;border-color:#1a2530!important;color:#e8edf2!important;font-family:'DM Mono',monospace!important;}
-div[data-testid="stPlotlyChart"]{background:#0d1318;border:1px solid #1a2530;border-radius:10px;padding:8px;}
+/* Forcar fundo escuro no grafico nativo */
+[data-testid="stArrowVegaLiteChart"] canvas, [data-testid="element-container"] canvas{background:#0d1318!important;}
+.chart-wrap{background:#0d1318;border:1px solid #1a2530;border-radius:10px;padding:16px 20px 8px;margin-bottom:8px;}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 </style>
 """, unsafe_allow_html=True)
@@ -441,11 +295,10 @@ with col_left:
 with col_right:
     variacao_html = ""
     if len(historico) >= 2:
-        diff     = historico[-1][1] - historico[-2][1]
-        seta     = "▲" if diff > 0.001 else "▼" if diff < -0.001 else "●"
-        cor_var  = "#00e5a0" if diff > 0.001 else "#ff4558" if diff < -0.001 else "#607a8a"
+        diff    = historico[-1][1] - historico[-2][1]
+        seta    = "▲" if diff > 0.001 else "▼" if diff < -0.001 else "●"
+        cor_var = "#00e5a0" if diff > 0.001 else "#ff4558" if diff < -0.001 else "#607a8a"
         variacao_html = f'<div style="font-family:\'DM Mono\',monospace;font-size:.6rem;color:{cor_var};margin-top:6px;">{seta} {diff:+.3f} vs periodo anterior</div>'
-
     st.markdown(f"""
     <div style="text-align:right;padding:8px 0">
       <div class="badge {badge_cls}">{verd}</div>
@@ -457,38 +310,67 @@ with col_right:
 
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
-# ── GRÁFICO DE EVOLUÇÃO ───────────────────────────────────────
+# ── GRÁFICO — st.line_chart nativo ───────────────────────────
 st.markdown(f'<div class="itl">EVOLUCAO DA ANALISE · {ev_sel["nome"]} · ULTIMOS {len(historico)} PERIODOS</div>', unsafe_allow_html=True)
 
-fig = gerar_grafico_plotly(historico)
-if fig:
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    st.markdown("""
-    <div style="display:flex;gap:24px;padding:0 4px 16px;margin-top:-12px;">
-      <div style="display:flex;align-items:center;gap:6px;">
-        <div style="width:14px;height:2px;background:#00e5a0;border-radius:2px;"></div>
-        <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:#3a4a5a;letter-spacing:1px;">ANALISE POSITIVA</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <div style="width:14px;height:2px;background:#ff4558;border-radius:2px;"></div>
-        <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:#3a4a5a;letter-spacing:1px;">ANALISE NEGATIVA</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <div style="width:14px;border-top:1px dashed #2a3a4a;"></div>
-        <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:#3a4a5a;letter-spacing:1px;">LINHA ZERO</span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+if historico and len(historico) >= 2:
+    datas  = [h[0] for h in historico]
+    scores = [h[1] for h in historico]
+
+    # DataFrame para o gráfico
+    df = pd.DataFrame({
+        "Data": pd.to_datetime(datas),
+        "Score": scores,
+    }).set_index("Data")
+
+    # Cor da linha baseada no score atual
+    cor_linha = "#00e5a0" if scores[-1] >= 0 else "#ff4558"
+
+    st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
+    st.line_chart(
+        df,
+        color=cor_linha,
+        height=260,
+        use_container_width=True,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Resumo abaixo do gráfico
+    n = len(scores)
+    col_a, col_b, col_c, col_d = st.columns(4)
+    sc_max  = max(scores)
+    sc_min  = min(scores)
+    sc_ini  = scores[0]
+    sc_fim  = scores[-1]
+    variacao_total = sc_fim - sc_ini
+    cor_tot = "#00e5a0" if variacao_total > 0 else "#ff4558" if variacao_total < 0 else "#607a8a"
+
+    def stat_card(label, valor, cor="#607a8a"):
+        return f"""
+        <div style="background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:12px 14px;text-align:center;">
+          <div style="font-family:'DM Mono',monospace;font-size:.5rem;letter-spacing:2px;color:#3a4a5a;margin-bottom:6px;">{label}</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;letter-spacing:3px;color:{cor};">{valor}</div>
+        </div>"""
+
+    with col_a:
+        st.markdown(stat_card("ATUAL", f"{sc_fim:+.3f}", cor_linha), unsafe_allow_html=True)
+    with col_b:
+        st.markdown(stat_card("MAXIMO", f"{sc_max:+.3f}", "#00e5a0"), unsafe_allow_html=True)
+    with col_c:
+        st.markdown(stat_card("MINIMO", f"{sc_min:+.3f}", "#ff4558"), unsafe_allow_html=True)
+    with col_d:
+        st.markdown(stat_card("VARIACAO TOTAL", f"{variacao_total:+.3f}", cor_tot), unsafe_allow_html=True)
+
 else:
     st.markdown("""
-    <div style="background:#0d1318;border:1px solid #1a2530;border-radius:10px;padding:48px 24px;text-align:center;
-    font-family:'DM Mono',monospace;font-size:.6rem;color:#2a3540;letter-spacing:2px;">
+    <div style="background:#0d1318;border:1px solid #1a2530;border-radius:10px;padding:48px 24px;
+    text-align:center;font-family:'DM Mono',monospace;font-size:.6rem;color:#2a3540;letter-spacing:2px;">
       SEM DADOS HISTORICOS SUFICIENTES<br>
       <span style="font-size:.55rem;">CONFIGURE A FRED_API_KEY EM SETTINGS > SECRETS</span>
     </div>
     """, unsafe_allow_html=True)
 
-st.markdown('<hr style="border-color:#1a2530;margin:4px 0 16px;">', unsafe_allow_html=True)
+st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
 # ── INDICADORES ───────────────────────────────────────────────
 st.markdown('<div class="itl">INDICADORES ANTECEDENTES · FRED API</div>', unsafe_allow_html=True)
@@ -539,8 +421,8 @@ else:
 st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
 st.markdown("""
 <div class="disc">
-  O grafico mostra como o score da analise cresceu ou diminuiu a cada novo dado divulgado.
-  Para cada periodo, o score e recalculado usando somente os dados disponiveis ate aquela data.
+  O grafico mostra a evolucao do score da analise periodo a periodo.
+  Para cada data, o score e recalculado usando somente os dados disponiveis ate aquele momento.
   Fonte: FRED API - Federal Reserve Bank of St. Louis. Nao constitui recomendacao de investimento.
 </div>
 <div style="text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;letter-spacing:2px;padding:16px 0;">
