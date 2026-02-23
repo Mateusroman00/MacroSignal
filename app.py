@@ -217,30 +217,35 @@ PESOS = {
 # ── SCORE ATUAL ───────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def calcular_score(tipo):
-    series  = SERIES.get(tipo, [])
-    nomes   = NOMES_IND.get(tipo, [])
-    pesos   = PESOS.get(tipo, [])
+    series      = SERIES.get(tipo, [])
+    nomes       = NOMES_IND.get(tipo, [])
+    pesos       = PESOS.get(tipo, [])
+    serie_princ = SERIE_PRINCIPAL.get(tipo, "")
     total_w = score = 0.0
     inds = []
-    ultima_data = ""
+
+    # Data real do último release da série principal
+    datas_release_princ = fred_release_dates(serie_princ) if serie_princ else []
+    ultima_release = datas_release_princ[-1] if datas_release_princ else ""
+
     for i, (sid, direcao) in enumerate(series):
         dados = fred_obs(sid, limit=36)
         vals  = [v for _, v in dados]
-        datas = [d for d, _ in dados]
+        datas_obs = [d for d, _ in dados]
         w     = pesos[i] if i < len(pesos) else 10
         val   = delta_de_lista(vals, direcao) if len(vals) >= 2 else 0.0
         score   += val * w
         total_w += w
-        data_serie = datas[-1] if datas else ""
-        if data_serie > ultima_data:
-            ultima_data = data_serie
+        # Data real de release de cada indicador individual
+        rel_ind = fred_release_dates(sid)
+        data_release_ind = rel_ind[-1] if rel_ind else (datas_obs[-1] if datas_obs else "")
         inds.append({
             "nome":        nomes[i] if i < len(nomes) else sid,
             "valor":       val,
-            "ultima_data": data_serie,
+            "ultima_data": data_release_ind,
             "ultimo_val":  vals[-1] if vals else None,
         })
-    return round(score / total_w if total_w else 0.0, 3), inds, ultima_data
+    return round(score / total_w if total_w else 0.0, 3), inds, ultima_release
 
 # ── HISTÓRICO ANCORADO NAS DATAS REAIS DE RELEASE ────────────
 @st.cache_data(ttl=3600)
