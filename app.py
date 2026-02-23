@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 
 st.set_page_config(page_title="MacroSignal", page_icon="📡", layout="wide", initial_sidebar_state="collapsed")
@@ -606,16 +607,62 @@ if historico and len(historico) >= 2:
     </div>
     """, unsafe_allow_html=True)
 
-    df = pd.DataFrame({
-        "Release": pd.to_datetime(datas),
-        "Score":   scores,
-    }).set_index("Release")
-
+    datas_dt  = pd.to_datetime(datas)
     cor_linha = "#00e5a0" if scores[-1] >= 0 else "#ff4558"
+    cor_fill  = "rgba(0,229,160,0.06)" if scores[-1] >= 0 else "rgba(255,69,88,0.06)"
 
-    st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
-    st.line_chart(df, color=cor_linha, height=280, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+
+    # Área preenchida
+    fig.add_trace(go.Scatter(
+        x=datas_dt, y=scores,
+        fill="tozeroy",
+        fillcolor=cor_fill,
+        line=dict(color=cor_linha, width=2),
+        mode="lines+markers",
+        marker=dict(color=cor_linha, size=5, line=dict(color="#080c10", width=1)),
+        hovertemplate="<b>%{x|%d/%m/%Y}</b><br>Score: %{y:+.3f}<extra></extra>",
+    ))
+
+    # Linha zero de referência
+    fig.add_hline(
+        y=0,
+        line=dict(color="#1a2530", width=1, dash="dot"),
+    )
+    # Faixas de referência FORTE / FRACO
+    fig.add_hrect(y0=0.2,  y1=1.0,  fillcolor="rgba(0,229,160,0.04)",  line_width=0)
+    fig.add_hrect(y0=-1.0, y1=-0.2, fillcolor="rgba(255,69,88,0.04)", line_width=0)
+
+    fig.update_layout(
+        height=280,
+        margin=dict(l=0, r=0, t=8, b=0),
+        paper_bgcolor="#0d1318",
+        plot_bgcolor="#0d1318",
+        font=dict(family="DM Mono, monospace", color="#4a5a6a", size=10),
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            tickfont=dict(color="#3a4a5a", size=9),
+            tickformat="%b/%y",
+            linecolor="#1a2530",
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="#111820",
+            zeroline=False,
+            tickfont=dict(color="#3a4a5a", size=9),
+            linecolor="#1a2530",
+            tickformat="+.2f",
+        ),
+        showlegend=False,
+        hoverlabel=dict(
+            bgcolor="#111820",
+            bordercolor="#1a2530",
+            font=dict(color="#e8edf2", family="DM Mono, monospace", size=11),
+        ),
+    )
+
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # ── Últimas 6 releases como mini-cards ───────────────────
     ultimas = list(zip(datas, scores))[-6:]
