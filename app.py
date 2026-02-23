@@ -10,20 +10,48 @@ FRED_KEY = st.secrets.get("FRED_API_KEY", "")
 # ── FRED ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def fred_obs(series_id, limit=20):
+    """Busca as observações mais RECENTES da FRED API."""
     if not FRED_KEY:
         return []
     try:
         r = requests.get("https://api.stlouisfed.org/fred/series/observations", params={
-            "series_id": series_id, "api_key": FRED_KEY,
-            "file_type": "json", "sort_order": "asc", "limit": limit
+            "series_id": series_id,
+            "api_key": FRED_KEY,
+            "file_type": "json",
+            "sort_order": "desc",       # ← mais recente primeiro
+            "limit": limit,
+            "observation_end": datetime.now(timezone.utc).strftime("%Y-%m-%d"),  # ← até hoje
         }, timeout=10)
-        return [
+        obs = [
             (o["date"], float(o["value"]))
             for o in r.json().get("observations", [])
             if o["value"] not in (".", "")
         ]
+        obs.reverse()  # ← volta para ordem cronológica crescente
+        return obs
     except Exception:
         return []
+
+@st.cache_data(ttl=3600)
+def fred_info(series_id):
+    """Retorna metadados da série (título, última atualização, unidade)."""
+    if not FRED_KEY:
+        return {}
+    try:
+        r = requests.get("https://api.stlouisfed.org/fred/series", params={
+            "series_id": series_id,
+            "api_key": FRED_KEY,
+            "file_type": "json",
+        }, timeout=10)
+        data = r.json().get("seriess", [{}])[0]
+        return {
+            "titulo": data.get("title", series_id),
+            "ultima_atualizacao": data.get("last_updated", ""),
+            "unidade": data.get("units_short", ""),
+            "frequencia": data.get("frequency_short", ""),
+        }
+    except Exception:
+        return {}
 
 def delta_de_lista(vals, direcao=1):
     if len(vals) < 2:
@@ -147,15 +175,26 @@ def calcular_score(tipo):
     pesos   = PESOS.get(tipo, [])
     total_w = score = 0.0
     inds = []
+    ultima_data = ""
     for i, (sid, direcao) in enumerate(series):
-        dados = fred_obs(sid, limit=7)
+        dados = fred_obs(sid, limit=12)  # mais observações para ter contexto
         vals  = [v for _, v in dados]
+        datas = [d for d, _ in dados]
         w     = pesos[i] if i < len(pesos) else 10
         val   = delta_de_lista(vals, direcao) if len(vals) >= 2 else 0.0
         score   += val * w
         total_w += w
-        inds.append({"nome": nomes[i] if i < len(nomes) else sid, "valor": val})
-    return round(score / total_w if total_w else 0.0, 3), inds
+        # captura a data mais recente desta série
+        data_serie = datas[-1] if datas else ""
+        if data_serie > ultima_data:
+            ultima_data = data_serie
+        inds.append({
+            "nome": nomes[i] if i < len(nomes) else sid,
+            "valor": val,
+            "ultima_data": data_serie,
+            "ultimo_valor": vals[-1] if vals else None,
+        })
+    return round(score / total_w if total_w else 0.0, 3), inds, ultima_data
 
 @st.cache_data(ttl=3600)
 def calcular_historico_score(tipo, n_periodos=12):
@@ -205,6 +244,14 @@ def direcao_par(par, cur, verd):
     forte = verd == "FORTE"
     return ("BUY" if forte else "SELL") if par[:3] == cur else ("SELL" if forte else "BUY")
 
+def formatar_data(data_str):
+    """Formata data YYYY-MM-DD para DD/MM/YYYY."""
+    try:
+        dt = datetime.strptime(data_str, "%Y-%m-%d")
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return data_str
+
 # ── CSS ───────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -222,15 +269,16 @@ st.markdown("""
 .scl{font-family:'DM Mono',monospace;font-size:.65rem;color:#4a5a6a;text-align:right;margin-top:6px;}
 .itl{font-family:'DM Mono',monospace;font-size:.58rem;letter-spacing:3px;color:#4a5a6a;margin-bottom:12px;}
 .inm{font-family:'DM Mono',monospace;font-size:.62rem;color:#607a8a;}
+.ind-data{font-family:'DM Mono',monospace;font-size:.52rem;color:#2a3a4a;margin-top:2px;}
 .pc{background:#111820;border:1px solid #1a2530;border-radius:6px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
 .pn{font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:2px;color:#e8edf2;}
 .pb{font-family:'Bebas Neue',sans-serif;font-size:.85rem;padding:3px 8px;border-radius:3px;background:rgba(0,229,160,.12);color:#00e5a0;border:1px solid rgba(0,229,160,.25);}
 .ps{font-family:'Bebas Neue',sans-serif;font-size:.85rem;padding:3px 8px;border-radius:3px;background:rgba(255,69,88,.12);color:#ff4558;border:1px solid rgba(255,69,88,.25);}
 .disc{background:rgba(255,209,102,.04);border:1px solid rgba(255,209,102,.12);border-radius:6px;padding:12px 16px;font-family:'DM Mono',monospace;font-size:.6rem;color:rgba(255,209,102,.6);line-height:1.7;}
 .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#00e5a0;box-shadow:0 0 8px #00e5a0;animation:pulse 2s infinite;}
+.data-tag{display:inline-block;font-family:'DM Mono',monospace;font-size:.52rem;letter-spacing:1px;color:#2a4a38;background:rgba(0,229,160,.06);border:1px solid rgba(0,229,160,.12);border-radius:3px;padding:1px 6px;margin-left:8px;}
 div[data-testid="stSelectbox"] label{font-family:'DM Mono',monospace!important;font-size:.6rem!important;letter-spacing:3px!important;color:#4a5a6a!important;}
 div[data-testid="stSelectbox"] > div > div{background:#0d1318!important;border-color:#1a2530!important;color:#e8edf2!important;font-family:'DM Mono',monospace!important;}
-/* Forcar fundo escuro no grafico nativo */
 [data-testid="stArrowVegaLiteChart"] canvas, [data-testid="element-container"] canvas{background:#0d1318!important;}
 .chart-wrap{background:#0d1318;border:1px solid #1a2530;border-radius:10px;padding:16px 20px 8px;margin-bottom:8px;}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -247,7 +295,7 @@ with c2:
     <div style="text-align:right;padding-top:8px;">
       <span class="live-dot"></span>
       <span style="font-family:'DM Mono',monospace;font-size:.85rem;color:#e8edf2;letter-spacing:2px;margin-left:6px;">{agora.strftime('%H:%M')} UTC</span><br>
-      <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:2px;">ULTIMA ATUALIZACAO</span>
+      <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:2px;">{agora.strftime('%d/%m/%Y')}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -272,7 +320,7 @@ ev_sel = opcoes_ev[idx_ev]
 
 # ── CALCULAR ──────────────────────────────────────────────────
 with st.spinner("Buscando dados FRED API..."):
-    score, inds = calcular_score(ev_sel["tipo"])
+    score, inds, ultima_data_serie = calcular_score(ev_sel["tipo"])
     historico   = calcular_historico_score(ev_sel["tipo"], n_periodos=12)
 
 verd      = veredicto(score)
@@ -285,20 +333,28 @@ st.markdown('<hr style="border-color:#1a2530;margin:8px 0 16px;">', unsafe_allow
 # ── CARD PRINCIPAL ────────────────────────────────────────────
 col_left, col_right = st.columns([1, 1])
 with col_left:
+    # Data mais recente dos dados desta análise
+    data_ref = formatar_data(ultima_data_serie) if ultima_data_serie else "—"
     st.markdown(f"""
     <div style="padding:8px 0">
       <div style="font-family:'Bebas Neue',sans-serif;font-size:2.8rem;letter-spacing:6px;color:#e8edf2;line-height:1;">{moeda}</div>
       <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:#607a8a;letter-spacing:2px;margin-top:6px;">{ev_sel['nome']}</div>
       <div style="font-family:'DM Mono',monospace;font-size:.55rem;color:#4a5a6a;margin-top:4px;">TIPO: {ev_sel['tipo']}</div>
+      <div style="font-family:'DM Mono',monospace;font-size:.52rem;color:#2a5a3a;margin-top:6px;">
+        <span style="color:#4a5a6a;">DADO MAIS RECENTE:</span>
+        <span class="data-tag">{data_ref}</span>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 with col_right:
     variacao_html = ""
     if len(historico) >= 2:
         diff    = historico[-1][1] - historico[-2][1]
+        data_hist_recente = formatar_data(historico[-1][0])
         seta    = "▲" if diff > 0.001 else "▼" if diff < -0.001 else "●"
         cor_var = "#00e5a0" if diff > 0.001 else "#ff4558" if diff < -0.001 else "#607a8a"
         variacao_html = f'<div style="font-family:\'DM Mono\',monospace;font-size:.6rem;color:{cor_var};margin-top:6px;">{seta} {diff:+.3f} vs periodo anterior</div>'
+        variacao_html += f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;margin-top:3px;">REF: {data_hist_recente}</div>'
     st.markdown(f"""
     <div style="text-align:right;padding:8px 0">
       <div class="badge {badge_cls}">{verd}</div>
@@ -310,33 +366,26 @@ with col_right:
 
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
-# ── GRÁFICO — st.line_chart nativo ───────────────────────────
-st.markdown(f'<div class="itl">EVOLUCAO DA ANALISE · {ev_sel["nome"]} · ULTIMOS {len(historico)} PERIODOS</div>', unsafe_allow_html=True)
+# ── GRÁFICO ───────────────────────────────────────────────────
+data_inicio_graf = formatar_data(historico[0][0]) if historico else "—"
+data_fim_graf    = formatar_data(historico[-1][0]) if historico else "—"
+st.markdown(f'<div class="itl">EVOLUCAO DA ANALISE · {ev_sel["nome"]} · {data_inicio_graf} → {data_fim_graf}</div>', unsafe_allow_html=True)
 
 if historico and len(historico) >= 2:
     datas  = [h[0] for h in historico]
     scores = [h[1] for h in historico]
 
-    # DataFrame para o gráfico
     df = pd.DataFrame({
         "Data": pd.to_datetime(datas),
         "Score": scores,
     }).set_index("Data")
 
-    # Cor da linha baseada no score atual
     cor_linha = "#00e5a0" if scores[-1] >= 0 else "#ff4558"
 
     st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
-    st.line_chart(
-        df,
-        color=cor_linha,
-        height=260,
-        use_container_width=True,
-    )
+    st.line_chart(df, color=cor_linha, height=260, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Resumo abaixo do gráfico
-    n = len(scores)
     col_a, col_b, col_c, col_d = st.columns(4)
     sc_max  = max(scores)
     sc_min  = min(scores)
@@ -373,24 +422,31 @@ else:
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
 # ── INDICADORES ───────────────────────────────────────────────
-st.markdown('<div class="itl">INDICADORES ANTECEDENTES · FRED API</div>', unsafe_allow_html=True)
+st.markdown('<div class="itl">INDICADORES ANTECEDENTES · FRED API · DADOS MAIS RECENTES</div>', unsafe_allow_html=True)
 
 for ind in inds:
     val = ind["valor"]
     pct = min(100, abs(val) * 100)
     cor = "#00e5a0" if val > 0.05 else "#ff4558" if val < -0.05 else "#607a8a"
     arr = "+" if val > 0.05 else "-" if val < -0.05 else "="
+    data_ind = formatar_data(ind.get("ultima_data", "")) if ind.get("ultima_data") else "—"
+
     cn, cb2, ca2 = st.columns([3, 6, 1])
     with cn:
-        st.markdown(f'<div class="inm" style="padding-top:4px;">{ind["nome"]}</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="padding-top:4px;">
+          <div class="inm">{ind["nome"]}</div>
+          <div class="ind-data">📅 {data_ind}</div>
+        </div>
+        """, unsafe_allow_html=True)
     with cb2:
         st.markdown(f"""
-        <div style="margin-top:8px;height:3px;background:#1a2530;border-radius:2px;">
+        <div style="margin-top:10px;height:3px;background:#1a2530;border-radius:2px;">
           <div style="width:{pct:.0f}%;height:100%;background:{cor};border-radius:2px;box-shadow:0 0 6px {cor}66;"></div>
         </div>
         """, unsafe_allow_html=True)
     with ca2:
-        st.markdown(f'<div style="font-family:DM Mono,monospace;font-size:.7rem;color:{cor};text-align:right;padding-top:2px;font-weight:bold;">{arr}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-family:DM Mono,monospace;font-size:.7rem;color:{cor};text-align:right;padding-top:4px;font-weight:bold;">{arr}</div>', unsafe_allow_html=True)
 
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
@@ -419,11 +475,13 @@ else:
 
 # ── DISCLAIMER ────────────────────────────────────────────────
 st.markdown('<hr style="border-color:#1a2530;margin:20px 0 16px;">', unsafe_allow_html=True)
-st.markdown("""
+st.markdown(f"""
 <div class="disc">
-  O grafico mostra a evolucao do score da analise periodo a periodo.
-  Para cada data, o score e recalculado usando somente os dados disponiveis ate aquele momento.
-  Fonte: FRED API - Federal Reserve Bank of St. Louis. Nao constitui recomendacao de investimento.
+  Dados obtidos em tempo real via FRED API (Federal Reserve Bank of St. Louis).
+  Cada serie busca as observacoes mais recentes disponiveis com sort_order=desc.
+  O score e recalculado usando os ultimos dados publicados para cada indicador.
+  Referencia temporal: dados ate {agora.strftime('%d/%m/%Y %H:%M')} UTC.
+  Nao constitui recomendacao de investimento.
 </div>
 <div style="text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:#4a5a6a;letter-spacing:2px;padding:16px 0;">
   MacroSignal · <span style="color:#00e5a0;">Analise Fundamentalista</span> · FRED API
