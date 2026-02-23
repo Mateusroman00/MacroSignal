@@ -415,27 +415,33 @@ with col_left:
     </div>
     """, unsafe_allow_html=True)
 with col_right:
-    variacao_html = ""
+    sinal_score = '+' if score >= 0 else ''
+    fred_info_str = f"FRED API · {len(historico)} RELEASES" if FRED_KEY else "SEM FRED_API_KEY"
+
+    # Monta bloco de variação separado
+    bloco_var = ""
     if len(historico) >= 2:
-        diff         = historico[-1][1] - historico[-2][1]
-        dt_rec       = fmt_data(historico[-1][0])
-        seta         = "▲" if diff > 0.001 else "▼" if diff < -0.001 else "●"
-        cor_var      = "#00e5a0" if diff > 0.001 else "#ff4558" if diff < -0.001 else "#607a8a"
-        variacao_html = f"""
-        <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:{cor_var};margin-top:6px;">{seta} {diff:+.3f} vs release anterior</div>
-        <div style="font-family:'DM Mono',monospace;font-size:.5rem;color:#3a4a5a;margin-top:3px;">
-          <span class="relbadge">RELEASE: {dt_rec}</span>
-        </div>"""
-    st.markdown(f"""
-    <div style="text-align:right;padding:8px 0">
-      <div class="badge {badge_cls}">{verd}</div>
-      <div class="scl">SCORE ATUAL: {'+' if score >= 0 else ''}{score:.3f}</div>
-      {variacao_html}
-      <div class="scl" style="font-size:.5rem;margin-top:4px;">
-        {'FRED API · ' + str(len(historico)) + ' RELEASES' if FRED_KEY else 'SEM FRED_API_KEY'}
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+        diff    = historico[-1][1] - historico[-2][1]
+        dt_rec  = fmt_data(historico[-1][0])
+        seta    = "▲" if diff > 0.001 else "▼" if diff < -0.001 else "●"
+        cor_var = "#00e5a0" if diff > 0.001 else "#ff4558" if diff < -0.001 else "#607a8a"
+        bloco_var = (
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.6rem;'
+            f'color:{cor_var};margin-top:6px;">{seta} {diff:+.3f} vs release anterior</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;'
+            f'color:#3a4a5a;margin-top:3px;">'
+            f'<span class="relbadge">RELEASE: {dt_rec}</span></div>'
+        )
+
+    html_right = (
+        '<div style="text-align:right;padding:8px 0">'
+        f'<div class="badge {badge_cls}">{verd}</div>'
+        f'<div class="scl">SCORE ATUAL: {sinal_score}{score:.3f}</div>'
+        f'{bloco_var}'
+        f'<div class="scl" style="font-size:.5rem;margin-top:4px;">{fred_info_str}</div>'
+        '</div>'
+    )
+    st.markdown(html_right, unsafe_allow_html=True)
 
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
