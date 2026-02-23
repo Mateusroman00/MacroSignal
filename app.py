@@ -296,6 +296,148 @@ def calcular_historico_releases(tipo, n_periodos=24):
 
     return resultado
 
+# ── PRÓXIMA RELEASE + FORECAST ───────────────────────────────
+@st.cache_data(ttl=3600)
+def proxima_release(series_id):
+    """Busca a próxima data de release programada (futura) da FRED."""
+    if not FRED_KEY:
+        return None
+    try:
+        r1 = requests.get(
+            "https://api.stlouisfed.org/fred/series/release",
+            params={"series_id": series_id, "api_key": FRED_KEY, "file_type": "json"},
+            timeout=10,
+        )
+        releases = r1.json().get("releases", [])
+        if not releases:
+            return None
+        release_id = releases[0]["id"]
+        release_nome = releases[0].get("name", "")
+
+        # Busca datas futuras
+        amanha = (HOJE + timedelta(days=1)).strftime("%Y-%m-%d")
+        futuro = (HOJE + timedelta(days=90)).strftime("%Y-%m-%d")
+        r2 = requests.get(
+            "https://api.stlouisfed.org/fred/release/dates",
+            params={
+                "release_id":    release_id,
+                "api_key":       FRED_KEY,
+                "file_type":     "json",
+                "sort_order":    "asc",
+                "realtime_start": amanha,
+                "realtime_end":   futuro,
+                "include_release_dates_with_no_data": "true",
+                "limit":         5,
+            },
+            timeout=10,
+        )
+        datas = [d["date"] for d in r2.json().get("release_dates", [])]
+        if datas:
+            return {"data": datas[0], "release_nome": release_nome}
+        return None
+    except Exception:
+        return None
+
+def calcular_forecast(historico_scores, inds):
+    """
+    Gera forecast estatístico baseado em:
+    - Tendência linear das últimas 6 releases
+    - Média ponderada dos indicadores antecedentes
+    - Momentum (aceleração/desaceleração)
+    Retorna dict com forecast, confiança e sinal.
+    """
+    if len(historico_scores) < 3:
+        return None
+
+    ultimos = [s for _, s in historico_scores[-8:]]
+    n = len(ultimos)
+
+    # Tendência linear simples
+    soma_x = sum(range(n))
+    soma_y = sum(ultimos)
+    soma_xy = sum(i * v for i, v in enumerate(ultimos))
+    soma_x2 = sum(i*i for i in range(n))
+    denom = n * soma_x2 - soma_x ** 2
+    if denom != 0:
+        slope = (n * soma_xy - soma_x * soma_y) / denom
+    else:
+        slope = 0.0
+
+    # Forecast = último valor + slope (próximo passo)
+    forecast_val = round(ultimos[-1] + slope, 3)
+    forecast_val = max(-1.0, min(1.0, forecast_val))
+
+    # Momentum: diferença média das últimas 3 variações
+    variacoes = [ultimos[i] - ultimos[i-1] for i in range(1, len(ultimos))]
+    momentum = sum(variacoes[-3:]) / 3 if len(variacoes) >= 3 else 0.0
+
+    # Score dos indicadores antecedentes (já calculado)
+    score_atual = ultimos[-1]
+
+    # Confiança baseada na consistência direcional
+    direcoes = [1 if v > 0 else -1 for v in ultimos[-6:]]
+    consistencia = abs(sum(direcoes)) / len(direcoes)  # 0 a 1
+
+    # Sinal composto
+    if forecast_val > 0.2 and momentum > 0:
+        sinal = "ALTA ACELERANDO"
+        cor_sinal = "#00e5a0"
+        emoji = "🚀"
+    elif forecast_val > 0.2 and momentum <= 0:
+        sinal = "ALTA DESACELERANDO"
+        cor_sinal = "#7ecfa0"
+        emoji = "📈"
+    elif forecast_val < -0.2 and momentum < 0:
+        sinal = "QUEDA ACELERANDO"
+        cor_sinal = "#ff4558"
+        emoji = "📉"
+    elif forecast_val < -0.2 and momentum >= 0:
+        sinal = "QUEDA DESACELERANDO"
+        cor_sinal = "#ff8a94"
+        emoji = "⚠️"
+    elif abs(forecast_val) <= 0.2 and score_atual > 0.2:
+        sinal = "REVERTENDO PARA NEUTRO"
+        cor_sinal = "#ffd166"
+        emoji = "↩️"
+    elif abs(forecast_val) <= 0.2 and score_atual < -0.2:
+        sinal = "RECUPERANDO PARA NEUTRO"
+        cor_sinal = "#ffd166"
+        emoji = "↪️"
+    else:
+        sinal = "LATERAL / INDEFINIDO"
+        cor_sinal = "#607a8a"
+        emoji = "➡️"
+
+    # Alinhamento score vs forecast (surpresa potencial)
+    alinhado = (score_atual > 0.2 and forecast_val > 0.2) or (score_atual < -0.2 and forecast_val < -0.2)
+    divergente = (score_atual > 0.2 and forecast_val < -0.1) or (score_atual < -0.2 and forecast_val > 0.1)
+
+    if alinhado:
+        alinhamento = "ALINHADO"
+        cor_ali = "#00e5a0"
+        desc_ali = "Score e tendência apontam mesma direção → maior confiança na entrada"
+    elif divergente:
+        alinhamento = "DIVERGENTE"
+        cor_ali = "#ff4558"
+        desc_ali = "Score e tendência divergem → cautela, aguardar confirmação no evento"
+    else:
+        alinhamento = "NEUTRO"
+        cor_ali = "#607a8a"
+        desc_ali = "Sinal misto → operar apenas com confirmação técnica"
+
+    return {
+        "forecast":     forecast_val,
+        "slope":        round(slope, 4),
+        "momentum":     round(momentum, 4),
+        "consistencia": round(consistencia * 100),
+        "sinal":        sinal,
+        "cor_sinal":    cor_sinal,
+        "emoji":        emoji,
+        "alinhamento":  alinhamento,
+        "cor_ali":      cor_ali,
+        "desc_ali":     desc_ali,
+    }
+
 # ── FX ────────────────────────────────────────────────────────
 ORDEM_FX   = {"EUR":0,"GBP":1,"AUD":2,"NZD":3,"USD":4,"CAD":5,"CHF":6,"JPY":7}
 CORRELATOS = {"USD":"CAD","CAD":"USD","AUD":"NZD","NZD":"AUD","EUR":"GBP","GBP":"EUR","CHF":"JPY","JPY":"CHF"}
@@ -387,9 +529,11 @@ with col_e:
 ev_sel = opcoes_ev[idx_ev]
 
 # ── CALCULAR ──────────────────────────────────────────────────
-with st.spinner("Buscando dados e releases da FRED API..."):
+with st.spinner("Buscando dados, releases e forecast da FRED API..."):
     score, inds, ultima_data_serie = calcular_score(ev_sel["tipo"])
     historico = calcular_historico_releases(ev_sel["tipo"], n_periodos=24)
+    prox_rel  = proxima_release(SERIE_PRINCIPAL.get(ev_sel["tipo"], "PAYEMS"))
+    forecast  = calcular_forecast(historico, inds)
 
 verd      = veredicto(score)
 badge_cls = "bf" if verd == "FORTE" else "bfr" if verd == "FRACO" else "bn"
@@ -555,6 +699,123 @@ for ind in inds:
         <div style="font-family:DM Mono,monospace;font-size:.7rem;color:{cor};
                     text-align:right;padding-top:4px;font-weight:bold;">{arr} {val:+.3f}</div>""",
                     unsafe_allow_html=True)
+
+st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
+
+# ── PRÓXIMO EVENTO + FORECAST ─────────────────────────────────
+st.markdown('<div class="itl">PROXIMO EVENTO · FORECAST vs SCORE ATUAL</div>', unsafe_allow_html=True)
+
+if forecast:
+    fc = forecast
+    dias_para_evento = "—"
+    data_evento_fmt  = "—"
+    release_nome_str = ""
+
+    if prox_rel:
+        try:
+            dt_ev = datetime.strptime(prox_rel["data"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            dias_para_evento = (dt_ev - HOJE).days
+            data_evento_fmt  = fmt_data(prox_rel["data"])
+            release_nome_str = prox_rel.get("release_nome", "")
+        except Exception:
+            pass
+
+    # Linha 1: próxima data + countdown
+    if prox_rel:
+        urgencia_cor = "#ff4558" if isinstance(dias_para_evento, int) and dias_para_evento <= 3 else \
+                       "#ffd166" if isinstance(dias_para_evento, int) and dias_para_evento <= 7 else "#607a8a"
+        countdown_html = (
+            f'<div style="background:#0d1318;border:1px solid #1a2530;border-radius:8px;'
+            f'padding:14px 18px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+            f'<div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.52rem;color:#4a5a6a;letter-spacing:2px;">PROXIMA RELEASE</div>'
+            f'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:1.4rem;letter-spacing:4px;color:#e8edf2;margin-top:4px;">{data_evento_fmt}</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;margin-top:2px;">{release_nome_str}</div>'
+            f'</div>'
+            f'<div style="text-align:right;">'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.52rem;color:#4a5a6a;">FALTAM</div>'
+            f'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:2rem;letter-spacing:4px;color:{urgencia_cor};">'
+            f'{dias_para_evento if isinstance(dias_para_evento, int) else "—"}</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;">DIAS</div>'
+            f'</div>'
+            f'</div>'
+        )
+        st.markdown(countdown_html, unsafe_allow_html=True)
+
+    # Linha 2: 4 cards — Score Atual | Forecast | Sinal | Alinhamento
+    c1f, c2f, c3f, c4f = st.columns(4)
+
+    cor_sc_at = "#00e5a0" if score > 0.2 else "#ff4558" if score < -0.2 else "#607a8a"
+    cor_fc    = "#00e5a0" if fc["forecast"] > 0.2 else "#ff4558" if fc["forecast"] < -0.2 else "#607a8a"
+    vrd_fc    = "FORTE" if fc["forecast"] > 0.2 else "FRACO" if fc["forecast"] < -0.2 else "NEUTRO"
+
+    with c1f:
+        st.markdown(
+            f'<div style="background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:14px;text-align:center;">'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;letter-spacing:2px;margin-bottom:6px;">SCORE ATUAL</div>'
+            f'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:1.6rem;letter-spacing:3px;color:{cor_sc_at};">{score:+.3f}</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.48rem;color:{cor_sc_at};margin-top:4px;">{verd}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    with c2f:
+        st.markdown(
+            f'<div style="background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:14px;text-align:center;">'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;letter-spacing:2px;margin-bottom:6px;">FORECAST</div>'
+            f'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:1.6rem;letter-spacing:3px;color:{cor_fc};">{fc["forecast"]:+.3f}</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.48rem;color:{cor_fc};margin-top:4px;">{vrd_fc}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    with c3f:
+        st.markdown(
+            f'<div style="background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:14px;text-align:center;">'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;letter-spacing:2px;margin-bottom:6px;">TENDENCIA</div>'
+            f'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:.95rem;letter-spacing:2px;color:{fc["cor_sinal"]};margin-top:6px;">{fc["emoji"]} {fc["sinal"]}</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.46rem;color:#3a4a5a;margin-top:6px;">MOMENTUM {fc["momentum"]:+.4f}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    with c4f:
+        st.markdown(
+            f'<div style="background:#0d1318;border:1px solid {fc["cor_ali"]}44;border-radius:8px;padding:14px;text-align:center;">'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.5rem;color:#3a4a5a;letter-spacing:2px;margin-bottom:6px;">ALINHAMENTO</div>'
+            f'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:1.1rem;letter-spacing:3px;color:{fc["cor_ali"]};margin-top:6px;">{fc["alinhamento"]}</div>'
+            f'<div style="font-family:\'DM Mono\',monospace;font-size:.44rem;color:#3a4a5a;margin-top:6px;">CONSISTENCIA {fc["consistencia"]}%</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+    # Bloco de interpretação operacional
+    st.markdown(
+        f'<div style="background:rgba(0,0,0,.3);border:1px solid {fc["cor_ali"]}33;border-radius:8px;'
+        f'padding:14px 18px;margin-top:10px;">'
+        f'<div style="font-family:\'DM Mono\',monospace;font-size:.55rem;color:#4a5a6a;letter-spacing:2px;margin-bottom:6px;">INTERPRETACAO OPERACIONAL</div>'
+        f'<div style="font-family:\'DM Mono\',monospace;font-size:.62rem;color:{fc["cor_ali"]};line-height:1.8;">'
+        f'{fc["desc_ali"]}'
+        f'</div>'
+        f'<div style="margin-top:10px;display:flex;gap:20px;">'
+        f'<div style="font-family:\'DM Mono\',monospace;font-size:.52rem;color:#3a4a5a;">'
+        f'SLOPE &nbsp;<span style="color:#607a8a;">{fc["slope"]:+.4f}</span>'
+        f'</div>'
+        f'<div style="font-family:\'DM Mono\',monospace;font-size:.52rem;color:#3a4a5a;">'
+        f'CONSISTENCIA DIRECIONAL &nbsp;<span style="color:#607a8a;">{fc["consistencia"]}%</span>'
+        f'</div>'
+        f'<div style="font-family:\'DM Mono\',monospace;font-size:.52rem;color:#3a4a5a;">'
+        f'RELEASES ANALISADAS &nbsp;<span style="color:#607a8a;">{len(historico)}</span>'
+        f'</div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+else:
+    st.markdown(
+        '<div style="background:#0d1318;border:1px solid #1a2530;border-radius:8px;padding:20px;'
+        'text-align:center;font-family:\'DM Mono\',monospace;font-size:.6rem;color:#2a3540;">'
+        'DADOS INSUFICIENTES PARA CALCULAR FORECAST</div>',
+        unsafe_allow_html=True
+    )
 
 st.markdown('<hr style="border-color:#1a2530;margin:16px 0;">', unsafe_allow_html=True)
 
